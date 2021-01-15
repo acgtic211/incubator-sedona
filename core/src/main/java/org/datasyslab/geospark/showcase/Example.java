@@ -33,6 +33,7 @@ import org.datasyslab.geospark.formatMapper.shapefileParser.ShapefileRDD;
 import org.datasyslab.geospark.serde.GeoSparkKryoRegistrator;
 import org.datasyslab.geospark.spatialOperator.JoinQuery;
 import org.datasyslab.geospark.spatialOperator.KNNQuery;
+import org.datasyslab.geospark.spatialOperator.KnnJoinQuery;
 import org.datasyslab.geospark.spatialOperator.RangeQuery;
 import org.datasyslab.geospark.spatialRDD.CircleRDD;
 import org.datasyslab.geospark.spatialRDD.PointRDD;
@@ -180,7 +181,8 @@ public class Example
         ShapeFileInputLocation = resourceFolder + "shapefiles/polygon";
 
         try {
-            testSpatialRangeQuery();
+            testKnnJoinQueryUsingIndex();
+            /*testSpatialRangeQuery();
             testSpatialRangeQueryUsingIndex();
             testSpatialKnnQuery();
             testSpatialKnnQueryUsingIndex();
@@ -190,7 +192,7 @@ public class Example
             testDistanceJoinQueryUsingIndex();
             testCRSTransformationSpatialRangeQuery();
             testCRSTransformationSpatialRangeQueryUsingIndex();
-            testLoadShapefileIntoPolygonRDD();
+            testLoadShapefileIntoPolygonRDD();*/
         }
         catch (Exception e) {
             e.printStackTrace();
@@ -281,8 +283,11 @@ public class Example
         objectRDD.spatialPartitioning(joinQueryPartitioningType);
         queryWindowRDD.spatialPartitioning(objectRDD.getPartitioner());
 
-        objectRDD.spatialPartitionedRDD.persist(StorageLevel.MEMORY_ONLY());
+        objectRDD.buildIndex(PointRDDIndexType, true);
+
+        objectRDD.indexedRDD.persist(StorageLevel.MEMORY_ONLY());
         queryWindowRDD.spatialPartitionedRDD.persist(StorageLevel.MEMORY_ONLY());
+
         for (int i = 0; i < eachQueryLoopTimes; i++) {
             long resultSize = JoinQuery.SpatialJoinQuery(objectRDD, queryWindowRDD, false, true).count();
             assert resultSize > 0;
@@ -359,6 +364,28 @@ public class Example
 
         for (int i = 0; i < eachQueryLoopTimes; i++) {
             long resultSize = JoinQuery.DistanceJoinQuery(objectRDD, queryWindowRDD, true, true).count();
+            assert resultSize > 0;
+        }
+    }
+
+    /**
+     * Test knn join query using index.
+     *
+     * @throws Exception the exception
+     */
+    public static void testKnnJoinQueryUsingIndex()
+            throws Exception
+    {
+        objectRDD = new PointRDD(sc, PointRDDInputLocation, PointRDDOffset, PointRDDSplitter, true, StorageLevel.MEMORY_ONLY());
+        PointRDD queryRDD = new PointRDD(sc, PointRDDInputLocation, PointRDDOffset, PointRDDSplitter, true, StorageLevel.MEMORY_ONLY());
+
+        objectRDD.spatialPartitioning(joinQueryPartitioningType);
+        queryRDD.spatialPartitioning(objectRDD.getPartitioner());
+
+        objectRDD.spatialPartitionedRDD.persist(StorageLevel.MEMORY_ONLY());
+        queryRDD.spatialPartitionedRDD.persist(StorageLevel.MEMORY_ONLY());
+        for (int i = 0; i < eachQueryLoopTimes; i++) {
+            long resultSize = KnnJoinQuery.KnnJoinQuery(objectRDD, queryRDD, 2,true, true).count();
             assert resultSize > 0;
         }
     }

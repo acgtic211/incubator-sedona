@@ -187,18 +187,18 @@ class JoinTestBase
         return gridType == GridType.QUADTREE || gridType == GridType.KDBTREE;
     }
 
-    protected <T extends Geometry> long countJoinResults(List<Tuple2<Polygon, HashSet<T>>> results)
+    protected <T extends Geometry, U extends Geometry> long countJoinResults(List<Tuple2<U, HashSet<T>>> results)
     {
         int count = 0;
-        for (final Tuple2<Polygon, HashSet<T>> tuple : results) {
+        for (final Tuple2<U, HashSet<T>> tuple : results) {
             count += tuple._2().size();
         }
         return count;
     }
 
-    protected <T extends Geometry> void sanityCheckJoinResults(List<Tuple2<Polygon, HashSet<T>>> results)
+    protected <T extends Geometry, U extends Geometry> void sanityCheckJoinResults(List<Tuple2<U, HashSet<T>>> results)
     {
-        for (final Tuple2<Polygon, HashSet<T>> tuple : results) {
+        for (final Tuple2<U, HashSet<T>> tuple : results) {
             assertNotNull(tuple._1().getUserData());
             assertFalse(tuple._2().isEmpty());
             for (final T shape : tuple._2()) {
