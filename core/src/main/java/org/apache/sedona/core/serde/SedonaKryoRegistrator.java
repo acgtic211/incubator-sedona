@@ -20,6 +20,7 @@
 package org.apache.sedona.core.serde;
 
 import com.esotericsoftware.kryo.Kryo;
+import com.esotericsoftware.kryo.serializers.FieldSerializer;
 import org.apache.log4j.Logger;
 import org.apache.sedona.core.geometryObjects.Circle;
 import org.apache.sedona.core.geometryObjects.GeometrySerde;
@@ -35,6 +36,7 @@ import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.Polygon;
 import org.locationtech.jts.index.quadtree.Quadtree;
 import org.locationtech.jts.index.strtree.STRtree;
+import org.apache.sedona.core.knnJoinJudgement.*;
 
 public class SedonaKryoRegistrator
         implements KryoRegistrator
@@ -62,5 +64,6 @@ public class SedonaKryoRegistrator
         // TODO: Replace the default serializer with default spatial index serializer
         kryo.register(Quadtree.class, indexSerializer);
         kryo.register(STRtree.class, indexSerializer);
+        kryo.register(KnnData.class, new FieldSerializer(kryo, KnnData.class));
     }
 }
