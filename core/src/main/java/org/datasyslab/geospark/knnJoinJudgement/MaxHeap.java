@@ -48,9 +48,7 @@ public class MaxHeap<T extends Geometry> extends PriorityQueue<GeometryWithDista
     }
 
     private void updateMinDistance(GeometryWithDistance<T> t){
-        if(t.distance < minDistance){
-            minDistance = t.distance;
-        }
+        minDistance = Math.min(minDistance, t.distance);
     }
 
 }
