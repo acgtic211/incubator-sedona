@@ -59,13 +59,13 @@ public class RightIndexLookupJudgement<T extends Geometry, U extends Geometry>
         }
 
         initPartition();
-
+        GeometryItemDistance geometryItemDistance = new GeometryItemDistance();
         SpatialIndex treeIndex = indexIterator.next();
         if (treeIndex instanceof STRtree) {
             while (streamShapes.hasNext()) {
                 T streamShape = streamShapes.next();
                 final MaxHeap<U> localK = new MaxHeap<U>(k);
-                Object[] topk = ((STRtree) treeIndex).kNearestNeighbour(streamShape.getEnvelopeInternal(), streamShape, new GeometryItemDistance(), this.k);
+                Object[] topk = ((STRtree) treeIndex).kNearestNeighbour(streamShape.getEnvelopeInternal(), streamShape, geometryItemDistance, this.k);
                 for (int i = 0; i < topk.length; i++) {
                     GeometryWithDistance<U> geom = new GeometryWithDistance<U>((U)topk[i], streamShape);
                     localK.add(geom);
