@@ -19,7 +19,6 @@ package org.datasyslab.geospark.knnJoinJudgement;
 
 import com.vividsolutions.jts.geom.Envelope;
 import com.vividsolutions.jts.geom.Geometry;
-import com.vividsolutions.jts.geom.Point;
 import com.vividsolutions.jts.index.SpatialIndex;
 import com.vividsolutions.jts.index.strtree.GeometryItemDistance;
 import com.vividsolutions.jts.index.strtree.STRtree;
@@ -29,12 +28,10 @@ import org.apache.spark.api.java.function.FlatMapFunction2;
 import org.datasyslab.geospark.geometryObjects.Circle;
 import org.datasyslab.geospark.joinJudgement.DedupParams;
 import org.datasyslab.geospark.spatialPartitioning.SpatialPartitioner;
-import org.datasyslab.geospark.utils.HalfOpenRectangle;
 
 import javax.annotation.Nullable;
 import java.io.Serializable;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 
@@ -50,7 +47,7 @@ public class RangeRightIndexLookupJudgement<T extends Geometry, U extends Geomet
      */
     public RangeRightIndexLookupJudgement(@Nullable DedupParams dedupParams, SpatialPartitioner partitioner, int k)
     {
-        super(true, dedupParams, k);
+        super(true, dedupParams, partitioner, k);
         this.partitioner = partitioner;
     }
 
@@ -66,48 +63,27 @@ public class RangeRightIndexLookupJudgement<T extends Geometry, U extends Geomet
 
         initPartition();
 
+        GeometryItemDistance geometryItemDistance = new GeometryItemDistance();
         SpatialIndex treeIndex = indexIterator.next();
         if (treeIndex instanceof STRtree) {
+            while (streamShapes.hasNext()) {
+                Circle circle = streamShapes.next();
+                T streamShape = (T) circle.getCenterGeometry();
 
-            if(streamShapes.hasNext()) {
-
-                Circle streamShape = streamShapes.next();
-                T point = (T) streamShape.getCenterGeometry();
-                final int partitionId = TaskContext.getPartitionId();
-
-                final List<Envelope> partitionExtents = this.partitioner.getGrids();
-                if (partitionId < partitionExtents.size()) {
-                    if(partitionExtents.get(partitionId).contains(point.getEnvelopeInternal()))
-                        return result.iterator();
+                if(contains(streamShape)){
+                    continue;
                 }
 
-                boolean hasNext = true;
-                while(hasNext){
-                    final MaxHeap<U> localK = new MaxHeap<U>(k);
-                    double radius = streamShape.getRadius();
-                    Object[] topk = ((STRtree) treeIndex).kNearestNeighbour(streamShape.getEnvelopeInternal(), point, new GeometryItemDistance(), this.k);
-                    for (int i = 0; i < topk.length; i++) {
-                        GeometryWithDistance<U> geom = new GeometryWithDistance<U>((U) topk[i], streamShape);
-                        if(geom.distance>radius){
-                            continue;
-                        }
-                        localK.add(geom);
-                    }
-                    result.add(Pair.of(point, new KnnData<U>(localK, true)));
+                KnnData<U> knnData = (KnnData<U>) calculateKnnData((STRtree) treeIndex, streamShape, geometryItemDistance, false);
 
-                    if(streamShapes.hasNext()){
-                        hasNext = true;
-                        streamShape = streamShapes.next();
-                        point = (T) streamShape.getCenterGeometry();
-                    }else{
-                        hasNext = false;
-                    }
-                }
+                result.add(Pair.of(streamShape, knnData));
             }
+
         }
         else {
             throw new Exception("[KnnJudgementUsingIndex][Call] QuadTree index doesn't support KNN search.");
         }
         return result.iterator();
     }
+
 }

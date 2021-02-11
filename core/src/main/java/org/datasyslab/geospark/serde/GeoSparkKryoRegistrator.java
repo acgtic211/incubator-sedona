@@ -18,6 +18,7 @@
 package org.datasyslab.geospark.serde;
 
 import com.esotericsoftware.kryo.Kryo;
+import com.esotericsoftware.kryo.serializers.FieldSerializer;
 import com.vividsolutions.jts.geom.Envelope;
 import com.vividsolutions.jts.geom.GeometryCollection;
 import com.vividsolutions.jts.geom.LineString;
@@ -35,6 +36,8 @@ import org.datasyslab.geospark.geometryObjects.GeometrySerde;
 import org.datasyslab.geospark.geometryObjects.SpatialIndexSerde;
 import org.datasyslab.geospark.knnJoinJudgement.*;
 
+import java.util.HashSet;
+
 public class GeoSparkKryoRegistrator
         implements KryoRegistrator
 {
@@ -47,9 +50,7 @@ public class GeoSparkKryoRegistrator
         GeometrySerde serializer = new GeometrySerde();
         SpatialIndexSerde indexSerializer = new SpatialIndexSerde(serializer);
 
-        GeometryWithDistanceSerde geometryWithDistanceSerde = new GeometryWithDistanceSerde();
-        MaxHeapSerde maxHeapSerde = new MaxHeapSerde(geometryWithDistanceSerde);
-        KnnDataSerde knnDataSerde = new KnnDataSerde(maxHeapSerde);
+
 
         log.info("Registering custom serializers for geometry types");
 
@@ -65,9 +66,7 @@ public class GeoSparkKryoRegistrator
         // TODO: Replace the default serializer with default spatial index serializer
         kryo.register(Quadtree.class, indexSerializer);
         kryo.register(STRtree.class, indexSerializer);
+        kryo.register(KnnData.class, new FieldSerializer(kryo, KnnData.class));
 
-        kryo.register(GeometryWithDistance.class, geometryWithDistanceSerde);
-        kryo.register(MaxHeap.class, maxHeapSerde);
-        kryo.register(KnnData.class, knnDataSerde);
     }
 }

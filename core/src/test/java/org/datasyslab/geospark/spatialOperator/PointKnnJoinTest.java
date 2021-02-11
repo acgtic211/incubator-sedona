@@ -25,8 +25,10 @@
  */
 package org.datasyslab.geospark.spatialOperator;
 
+import com.vividsolutions.jts.geom.Geometry;
 import com.vividsolutions.jts.geom.Point;
 import com.vividsolutions.jts.geom.Polygon;
+import org.apache.spark.api.java.function.Function2;
 import org.datasyslab.geospark.enums.GridType;
 import org.datasyslab.geospark.enums.IndexType;
 import org.datasyslab.geospark.enums.JoinBuildSide;
@@ -42,10 +44,7 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import scala.Tuple2;
 
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
+import java.util.*;
 
 import static org.junit.Assert.assertEquals;
 
@@ -68,7 +67,7 @@ public class PointKnnJoinTest
     public static Collection testParams()
     {
         return Arrays.asList(new Object[][] {
-                {GridType.RTREE, false, 11},
+                {GridType.VORONOI, false, 10},
         });
     }
 
@@ -108,26 +107,78 @@ public class PointKnnJoinTest
             throws Exception
     {
         PointRDD queryRDD = createPointRDD();
-
-        testIndexInt(queryRDD, IndexType.RTREE, expectedRectangleMatchCount);
+        testIndexInt(queryRDD, IndexType.RTREE, true, expectedRectangleMatchCount);
     }
 
-    private void testIndexInt(SpatialRDD<Point> queryRDD, IndexType indexType, long expectedCount)
+    /**
+     * Test spatial join query with rectangle RDD using rtree index.
+     *
+     * @throws Exception the exception
+     */
+    @Test
+    public void testDynamicIndexWithPoints()
+            throws Exception
+    {
+        PointRDD queryRDD = createPointRDD();
+        testIndexInt(queryRDD, null, true, expectedRectangleMatchCount);
+    }
+
+    /**
+     * Test spatial join query with rectangle RDD using rtree index.
+     *
+     * @throws Exception the exception
+     */
+    @Test
+    public void testNoIndexWithPoints()
+            throws Exception
+    {
+        PointRDD queryRDD = createPointRDD();
+        testIndexInt(queryRDD, null, false, expectedRectangleMatchCount);
+    }
+
+    private void testIndexInt(SpatialRDD<Point> queryRDD, IndexType indexType, boolean useIndex, long expectedCount)
             throws Exception
     {
         PointRDD spatialRDD = createPointRDD();
 
         partitionRdds(queryRDD, spatialRDD);
-        spatialRDD.buildIndex(indexType, true);
 
-        List<Tuple2<Point, MaxHeap<Point>>> result = KnnJoinQuery.KnnJoinQuery(spatialRDD, queryRDD, 10,true, true).collect();
+        if(indexType!=null)
+            spatialRDD.buildIndex(indexType, true);
 
+        //System.out.println(queryRDD.spatialPartitionedRDD.mapPartitionsWithIndex(elementsPerPartition(), false).collect().toString());
+
+        //System.out.println(spatialRDD.spatialPartitionedRDD.mapPartitionsWithIndex(elementsPerPartition(), false).collect().toString());
+
+        List<Tuple2<Point, List<Point>>> result = KnnJoinQuery.KnnJoinQuery(spatialRDD, queryRDD, 10,useIndex, true, gridType).collect();
+        System.out.println(countKNNJoinResults(result));
         //sanityCheckJoinResults(result);
         //assertEquals(expectedCount, countJoinResults(result));
+    }
+
+    private Function2<Integer, Iterator<Point>, Iterator<Integer>> elementsPerPartition() {
+        return (integer, pointIterator) -> {
+           int n = 0;
+           while(pointIterator.hasNext()) {
+               n++;
+               pointIterator.next();
+           }
+           return Collections.singletonList(n).iterator();
+        };
     }
 
     private PointRDD createPointRDD()
     {
         return createPointRDD(InputLocation);
     }
+
+    protected <T extends Geometry, U extends Geometry> long countKNNJoinResults(List<Tuple2<U, List<T>>> results)
+    {
+        int count = 0;
+        for (final Tuple2<U, List<T>> tuple : results) {
+            count += tuple._2().size();
+        }
+        return count;
+    }
+
 }

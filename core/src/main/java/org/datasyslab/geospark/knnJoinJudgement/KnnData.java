@@ -3,20 +3,16 @@ package org.datasyslab.geospark.knnJoinJudgement;
 import com.vividsolutions.jts.geom.Geometry;
 
 import java.io.Serializable;
-import java.util.HashSet;
+import java.util.List;
 
 public class KnnData<T extends Geometry> implements Serializable {
-    public MaxHeap<T> neighbors;
+    public List<T> neighbors;
     public boolean isFinal;
+    public double distance;
 
-    public KnnData(int k)
-    {
-        neighbors = new MaxHeap<>(k);
-        isFinal = false;
-    }
-
-    public KnnData(MaxHeap<T> neighbors, boolean isFinal) {
+    public KnnData(List<T> neighbors, boolean isFinal, double distance) {
         this.neighbors = neighbors;
         this.isFinal = isFinal;
+        this.distance = distance;
     }
 }

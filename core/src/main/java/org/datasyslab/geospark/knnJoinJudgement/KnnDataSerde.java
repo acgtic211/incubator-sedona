@@ -34,8 +34,6 @@ public class KnnDataSerde extends Serializer {
 
     @Override
     public Object read(Kryo kryo, Input input, Class aClass) {
-        MaxHeap neighbors = (MaxHeap) maxHeapSerde.read(kryo, input, aClass);
-        KnnData knnData = new KnnData(neighbors, input.readBoolean());
-        return knnData;
+        return null;
     }
 }

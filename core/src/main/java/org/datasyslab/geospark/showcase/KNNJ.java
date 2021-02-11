@@ -24,6 +24,7 @@ import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.function.Function2;
 import org.apache.spark.serializer.KryoSerializer;
 import org.apache.spark.storage.StorageLevel;
 import org.datasyslab.geospark.enums.FileDataSplitter;
@@ -41,6 +42,8 @@ import org.datasyslab.geospark.spatialRDD.PolygonRDD;
 import scala.Int;
 
 import java.io.Serializable;
+import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 
 // TODO: Auto-generated Javadoc
@@ -119,7 +122,12 @@ public class KNNJ
      */
     public static void main(String[] args)
     {
-        SparkConf conf = new SparkConf().setAppName("GeoSparkRunnableExample");
+        String appName = "KNNJ ";
+        for(int n = 0; n < args.length; n++){
+            appName += args[n];
+        }
+
+        SparkConf conf = new SparkConf().setAppName(appName);
         conf.set("spark.serializer", KryoSerializer.class.getName());
         conf.set("spark.kryo.registrator", GeoSparkKryoRegistrator.class.getName());
 
@@ -135,10 +143,25 @@ public class KNNJ
         PointRDDInputLocation = args[1];
 
         k = Integer.parseInt(args[2]);
-        joinQueryPartitioningType = GridType.QUADTREE;
+
+        if(args[3].equals("grid")){
+            joinQueryPartitioningType = GridType.EQUALGRID;
+        } else if(args[3].equals("quadtree")){
+            joinQueryPartitioningType = GridType.QUADTREE;
+        } else if(args[3].equals("rtree")){
+            joinQueryPartitioningType = GridType.RTREE;
+        } else if(args[3].equals("kdbtree")){
+            joinQueryPartitioningType = GridType.KDBTREE;
+        }
         eachQueryLoopTimes = 1;
 
-        partitions = args.length == 4 ? Integer.parseInt(args[3]) : 500;
+        if(args[4].equals("rtree")){
+            PointRDDIndexType = IndexType.RTREE;
+        } else {
+            PointRDDIndexType = null;
+        }
+
+        partitions = args.length == 6 ? Integer.parseInt(args[5]) : null;
 
         try {
             testKnnJoinQueryUsingIndex();
@@ -173,16 +196,36 @@ public class KNNJ
         queryRDD.spatialPartitioning(objectRDD.getPartitioner());
 
         System.out.println("Build Index "+PointRDDInputLocation);
-        objectRDD.buildIndex(PointRDDIndexType, true);
-        objectRDD.indexedRDD.persist(StorageLevel.MEMORY_ONLY());
+        if(PointRDDIndexType!=null) {
+            objectRDD.buildIndex(PointRDDIndexType, true);
+            objectRDD.indexedRDD.persist(StorageLevel.MEMORY_ONLY());
+        } else {
+            objectRDD.spatialPartitionedRDD.persist(StorageLevel.MEMORY_ONLY());
+        }
         queryRDD.spatialPartitionedRDD.persist(StorageLevel.MEMORY_ONLY());
+
+        //System.out.println(queryRDD.spatialPartitionedRDD.mapPartitionsWithIndex(elementsPerPartition(), false).collect().toString());
+
+        //System.out.println(objectRDD.spatialPartitionedRDD.mapPartitionsWithIndex(elementsPerPartition(), false).collect().toString());
 
         for (int i = 0; i < eachQueryLoopTimes; i++) {
             System.out.println("Joining");
 
-            long resultSize = KnnJoinQuery.KnnJoinQuery(objectRDD, queryRDD, k,true, true).count();
-            assert resultSize > 0;
+            long resultSize = KnnJoinQuery.KnnJoinQuery(objectRDD, queryRDD, k,PointRDDIndexType!=null, true, joinQueryPartitioningType).count();
+
+            System.out.println(resultSize);
         }
+    }
+
+    private static Function2<Integer, Iterator<Point>, Iterator<Integer>> elementsPerPartition() {
+        return (integer, pointIterator) -> {
+            int n = 0;
+            while(pointIterator.hasNext()) {
+                n++;
+                pointIterator.next();
+            }
+            return Collections.singletonList(n).iterator();
+        };
     }
 
 }

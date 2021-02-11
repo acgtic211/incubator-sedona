@@ -19,7 +19,6 @@ package org.datasyslab.geospark.knnJoinJudgement;
 import com.vividsolutions.jts.geom.Envelope;
 import com.vividsolutions.jts.geom.Geometry;
 import com.vividsolutions.jts.index.SpatialIndex;
-import com.vividsolutions.jts.index.quadtree.Quadtree;
 import com.vividsolutions.jts.index.strtree.GeometryItemDistance;
 import com.vividsolutions.jts.index.strtree.STRtree;
 import org.apache.commons.lang3.tuple.Pair;
@@ -30,6 +29,7 @@ import org.apache.spark.TaskContext;
 import org.apache.spark.api.java.function.FlatMapFunction2;
 import org.datasyslab.geospark.enums.IndexType;
 import org.datasyslab.geospark.enums.JoinBuildSide;
+import org.datasyslab.geospark.geometryObjects.Circle;
 import org.datasyslab.geospark.joinJudgement.DedupParams;
 import org.datasyslab.geospark.monitoring.GeoSparkMetric;
 import org.datasyslab.geospark.spatialPartitioning.SpatialPartitioner;
@@ -40,12 +40,12 @@ import java.util.*;
 
 import static org.datasyslab.geospark.utils.TimeUtils.elapsedSince;
 
-public class DynamicIndexLookupJudgement<T extends Geometry, U extends Geometry>
+public class RangeDynamicIndexLookupJudgement<T extends Geometry, U extends Geometry>
         extends JudgementBase
-        implements FlatMapFunction2<Iterator<T>, Iterator<U>, Pair<T, KnnData<U>>>, Serializable
+        implements FlatMapFunction2<Iterator<Circle>, Iterator<U>, Pair<T, KnnData<U>>>, Serializable
 {
 
-    private static final Logger log = LogManager.getLogger(DynamicIndexLookupJudgement.class);
+    private static final Logger log = LogManager.getLogger(RangeDynamicIndexLookupJudgement.class);
 
     private final IndexType indexType;
     private final JoinBuildSide joinBuildSide;
@@ -57,16 +57,16 @@ public class DynamicIndexLookupJudgement<T extends Geometry, U extends Geometry>
     /**
      * @see JudgementBase
      */
-    public DynamicIndexLookupJudgement(boolean considerBoundaryIntersection,
-                                       IndexType indexType,
-                                       JoinBuildSide joinBuildSide,
-                                       @Nullable DedupParams dedupParams,
-                                       SpatialPartitioner partitioner,
-                                       int k,
-                                       GeoSparkMetric buildCount,
-                                       GeoSparkMetric streamCount,
-                                       GeoSparkMetric resultCount,
-                                       GeoSparkMetric candidateCount)
+    public RangeDynamicIndexLookupJudgement(boolean considerBoundaryIntersection,
+                                            IndexType indexType,
+                                            JoinBuildSide joinBuildSide,
+                                            @Nullable DedupParams dedupParams,
+                                            SpatialPartitioner partitioner,
+                                            int k,
+                                            GeoSparkMetric buildCount,
+                                            GeoSparkMetric streamCount,
+                                            GeoSparkMetric resultCount,
+                                            GeoSparkMetric candidateCount)
     {
         super(considerBoundaryIntersection, dedupParams, partitioner, k);
         this.indexType = indexType;
@@ -78,7 +78,7 @@ public class DynamicIndexLookupJudgement<T extends Geometry, U extends Geometry>
     }
 
     @Override
-    public Iterator<Pair<T, KnnData<U>>> call(Iterator<T> leftShapes, Iterator<U> rightShapes)
+    public Iterator<Pair<T, KnnData<U>>> call(Iterator<Circle> leftShapes, Iterator<U> rightShapes)
             throws Exception
     {
 
@@ -95,7 +95,7 @@ public class DynamicIndexLookupJudgement<T extends Geometry, U extends Geometry>
         final boolean buildLeft = (joinBuildSide == JoinBuildSide.LEFT);
 
         final Iterator<? extends Geometry> buildShapes;
-        final Iterator<? extends Geometry> streamShapes;
+        final Iterator<Circle> streamShapes;
         buildShapes = rightShapes;
         streamShapes = leftShapes;
 
@@ -156,8 +156,14 @@ public class DynamicIndexLookupJudgement<T extends Geometry, U extends Geometry>
                 while (streamShapes.hasNext()) {
                     shapeCnt++;
                     streamCount.add(1);
-                    final T streamShape = (T) streamShapes.next();
-                    KnnData<U> knnData = (KnnData<U>) calculateKnnData((STRtree) spatialIndex, streamShape, geometryItemDistance, true);
+                    Circle circle = streamShapes.next();
+                    final T streamShape = (T) circle.getCenterGeometry();
+
+                    if(contains(streamShape)){
+                        continue;
+                    }
+
+                    KnnData<U> knnData = (KnnData<U>) calculateKnnData((STRtree) spatialIndex, streamShape, geometryItemDistance, false);
                     resultCount.add(1);
                     batch.add(Pair.of(streamShape, knnData));
 

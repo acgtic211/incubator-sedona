@@ -22,24 +22,26 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 import org.apache.spark.SparkContext;
-import org.apache.spark.TaskContext;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.function.Function;
-import org.apache.spark.api.java.function.Function2;
 import org.apache.spark.api.java.function.PairFunction;
+import org.apache.spark.storage.StorageLevel;
+import org.datasyslab.geospark.enums.GridType;
 import org.datasyslab.geospark.enums.IndexType;
 import org.datasyslab.geospark.enums.JoinBuildSide;
 import org.datasyslab.geospark.geometryObjects.Circle;
 import org.datasyslab.geospark.joinJudgement.DedupParams;
 import org.datasyslab.geospark.knnJoinJudgement.*;
+import org.datasyslab.geospark.knnJudgement.GeometryDistanceComparator;
 import org.datasyslab.geospark.monitoring.GeoSparkMetric;
 import org.datasyslab.geospark.monitoring.GeoSparkMetrics;
 import org.datasyslab.geospark.spatialPartitioning.SpatialPartitioner;
 import org.datasyslab.geospark.spatialRDD.SpatialRDD;
 import scala.Tuple2;
 
-import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.PriorityQueue;
 
@@ -89,14 +91,16 @@ public class KnnJoinQuery
         public final boolean allowDuplicates;
         public final IndexType indexType;
         public final JoinBuildSide joinBuildSide;
+        public final GridType gridType;
 
-        public JoinParams(boolean useIndex, boolean considerBoundaryIntersection, boolean allowDuplicates)
+        public JoinParams(boolean useIndex, boolean considerBoundaryIntersection, boolean allowDuplicates, GridType gridType)
         {
             this.useIndex = useIndex;
             this.considerBoundaryIntersection = considerBoundaryIntersection;
             this.allowDuplicates = allowDuplicates;
             this.indexType = IndexType.RTREE;
             this.joinBuildSide = JoinBuildSide.RIGHT;
+            this.gridType = gridType;
         }
 
         public JoinParams(boolean considerBoundaryIntersection, IndexType polygonIndexType, JoinBuildSide joinBuildSide)
@@ -106,14 +110,15 @@ public class KnnJoinQuery
             this.allowDuplicates = false;
             this.indexType = polygonIndexType;
             this.joinBuildSide = joinBuildSide;
+            this.gridType = GridType.QUADTREE;
         }
     }
 
-    public static <U extends Geometry, T extends Geometry> JavaPairRDD<U, MaxHeap<T>> KnnJoinQuery(SpatialRDD<T> spatialRDD, SpatialRDD<U> queryRDD, int k,  boolean useIndex, boolean considerBoundaryIntersection)
+    public static <U extends Geometry, T extends Geometry> JavaPairRDD<U, List<T>> KnnJoinQuery(SpatialRDD<T> spatialRDD, SpatialRDD<U> queryRDD, int k,  boolean useIndex, boolean considerBoundaryIntersection, GridType gridType)
             throws Exception
     {
-        final JoinParams joinParams = new JoinParams(useIndex, considerBoundaryIntersection, true);
-        final JavaPairRDD<U, MaxHeap<T>> joinResults = knnJoin(queryRDD, spatialRDD, k, joinParams);
+        final JoinParams joinParams = new JoinParams(useIndex, considerBoundaryIntersection, true, gridType);
+        final JavaPairRDD<U, List<T>> joinResults = knnJoin(queryRDD, spatialRDD, k, joinParams);
         return joinResults;
     }
 
@@ -121,8 +126,9 @@ public class KnnJoinQuery
      * <p>
      * Note: INTERNAL FUNCTION. API COMPATIBILITY IS NOT GUARANTEED. DO NOT USE IF YOU DON'T KNOW WHAT IT IS.
      * </p>
+     * @return
      */
-    public static <U extends Geometry, T extends Geometry> JavaPairRDD<U, MaxHeap<T>> knnJoin(
+    public static <U extends Geometry, T extends Geometry> JavaPairRDD<U, List<T>> knnJoin(
             SpatialRDD<U> leftRDD,
             SpatialRDD<T> rightRDD,
             int k,
@@ -144,68 +150,160 @@ public class KnnJoinQuery
         final DedupParams dedupParams = partitioner.getDedupParams();
 
         final JavaRDD<Pair<U, KnnData<T>>> resultWithDuplicates;
-        JavaRDD<Pair<U, KnnData<T>>> finalKnnLists, nonFinalKnnLists;
+        JavaRDD<Pair<U, KnnData<T>>> finalKnnLists, nonFinalKnnLists, nonFinalKnnLists2;
         if (joinParams.useIndex) {
             if (rightRDD.indexedRDD != null) {
                 final RightIndexLookupJudgement judgement =
                         new RightIndexLookupJudgement(dedupParams, partitioner, k);
                 resultWithDuplicates = leftRDD.spatialPartitionedRDD.zipPartitions(rightRDD.indexedRDD, judgement);
-                resultWithDuplicates.cache();
 
-                finalKnnLists = resultWithDuplicates.filter(pair -> {
-                    return pair.getValue().isFinal;
-                });
-
-                nonFinalKnnLists = resultWithDuplicates.filter(pair -> {
-                    return !pair.getValue().isFinal;
-                });
-
-                JavaRDD<Circle> circles = nonFinalKnnLists.map(pair -> {
-                    Circle circle = new Circle(pair.getKey(), pair.getValue().neighbors.getMaxDistance());
-                    return circle;
-                });
-
-                SpatialRDD<Circle> we = new SpatialRDD<Circle>();
-                we.rawSpatialRDD = circles;
-                we.spatialPartitioning(partitioner);
-
-                final RangeRightIndexLookupJudgement rangeJudgement =
-                        new RangeRightIndexLookupJudgement(dedupParams, k);
-                nonFinalKnnLists = we.spatialPartitionedRDD.zipPartitions(rightRDD.indexedRDD, rangeJudgement);
-
-                JavaPairRDD<U, MaxHeap<T>> nonFinalKnnResults = nonFinalKnnLists.mapToPair((PairFunction<Pair<U, KnnData<T>>, U, MaxHeap<T>>) pair -> new Tuple2<U, MaxHeap<T>>(pair.getKey(), pair.getValue().neighbors));
-
-                nonFinalKnnResults = nonFinalKnnResults.reduceByKey((left,right)->{
-                    MaxHeap<T> small;
-                    MaxHeap<T> large;
-                    if(left.getMaxDistance()<right.getMaxDistance()){
-                        small = left;
-                        large = right;
-                    } else {
-                        small = right;
-                        large = left;
-                    }
-
-                    if(large.getMinDistance()>=small.getMaxDistance()){
-                        return small;
-                    }
-
-                    for(GeometryWithDistance<T> geom:large){
-                        small.add(geom);
-                    }
-
-                    return small;
-                });
-
-                JavaPairRDD<U, MaxHeap<T>> finalKnnResults = finalKnnLists.mapToPair((PairFunction<Pair<U, KnnData<T>>, U, MaxHeap<T>>) pair -> new Tuple2<U, MaxHeap<T>>(pair.getKey(), pair.getValue().neighbors));
-
-                JavaPairRDD<U, MaxHeap<T>> result = finalKnnResults.union(nonFinalKnnResults);
-                return result;
+            } else {
+                DynamicIndexLookupJudgement judgement =
+                    new DynamicIndexLookupJudgement(
+                        joinParams.considerBoundaryIntersection,
+                        joinParams.indexType,
+                        joinParams.joinBuildSide,
+                        dedupParams,
+                        partitioner,
+                        k,
+                        buildCount, streamCount, resultCount, candidateCount);
+                resultWithDuplicates = leftRDD.spatialPartitionedRDD.zipPartitions(rightRDD.spatialPartitionedRDD, judgement);
             }
-
+        } else {
+            final NestedLoopJudgement judgement =
+                    new NestedLoopJudgement(dedupParams, partitioner, k);
+            resultWithDuplicates = leftRDD.spatialPartitionedRDD.zipPartitions(rightRDD.spatialPartitionedRDD, judgement);
         }
 
-        return null;
+        JavaPairRDD<U, Pair<U,KnnData<T>>> tempResult = resultWithDuplicates.mapToPair((PairFunction<Pair<U, KnnData<T>>, U, Pair<U,KnnData<T>>>) pair -> new Tuple2<U, Pair<U,KnnData<T>>>(pair.getKey(), Pair.of(pair.getKey(), pair.getValue())));
+        final JavaRDD<Pair<U, KnnData<T>>> goodResult = tempResult.combineByKey(
+                uKnnDataPair -> {
+                    PriorityQueue<T> pq = new PriorityQueue<T>(k, new GeometryDistanceComparator(uKnnDataPair.getLeft(), false));
+                    for (T curpoint : uKnnDataPair.getRight().neighbors) {
+                        pq.offer(curpoint);
+                    }
+                    return pq;
+                },
+                ( pq, pair )-> {
+                    for(T curpoint: pair.getRight().neighbors){
+                        pq.offer(curpoint);
+                        if(pq.size()>k){
+                            pq.poll();
+                        }
+
+                    }
+                    return pq;
+                },
+                ( pq, pq_other )-> {
+                    while(!pq_other.isEmpty()){
+                        T other = pq_other.poll();
+                        if(!pq.contains(other)) {
+                            pq.offer(other);
+                            if (pq.size() > k) {
+                                pq.poll();
+                            }
+                        }
+
+                    }
+                    return pq;
+                }).map((Function<Tuple2<U, PriorityQueue<T>>, Pair<U, KnnData<T>>>) pair -> {
+            double maxDistance = pair._1.distance(pair._2.peek());
+            List<T> neighbors = new ArrayList<>(pair._2);
+            boolean isFinal = true;
+            final Circle circle = new Circle(pair._1,maxDistance);
+            for(Envelope env : partitioner.getGrids()){
+                if(circle.getEnvelopeInternal().intersects(env)&&!env.contains(pair._1.getEnvelopeInternal())){
+                    isFinal = false;
+                    break;
+                }
+            }
+            return Pair.of(pair._1(), new KnnData<T>(neighbors, isFinal, maxDistance));
+        });
+
+                    //System.out.println(goodResult.distinct().count());
+        final JavaRDD<Pair<U, KnnData<T>>> temp = joinParams.gridType == GridType.VORONOI || joinParams.gridType == GridType.HILBERT ? goodResult : resultWithDuplicates;
+        temp.persist(StorageLevel.MEMORY_ONLY());
+
+        finalKnnLists = temp.filter(pair -> pair.getValue().isFinal);
+
+        nonFinalKnnLists = temp.filter(pair -> !pair.getValue().isFinal);
+
+        //System.out.println(finalKnnLists.count());
+        //System.out.println(nonFinalKnnLists.count());
+
+        JavaRDD<Circle> circles = nonFinalKnnLists.map(pair -> new Circle(pair.getKey(), pair.getValue().distance));
+
+        SpatialRDD<Circle> spatialCircles = new SpatialRDD<>();
+        spatialCircles.rawSpatialRDD = circles;
+        spatialCircles.spatialPartitioning(partitioner);
+
+        if (joinParams.useIndex) {
+            if (rightRDD.indexedRDD != null) {
+                final RangeRightIndexLookupJudgement rangeJudgement =
+                        new RangeRightIndexLookupJudgement(dedupParams, partitioner, k);
+                nonFinalKnnLists2 = spatialCircles.spatialPartitionedRDD.zipPartitions(rightRDD.indexedRDD, rangeJudgement);
+
+            } else {
+                RangeDynamicIndexLookupJudgement rangeJudgement =
+                        new RangeDynamicIndexLookupJudgement(
+                                joinParams.considerBoundaryIntersection,
+                                joinParams.indexType,
+                                joinParams.joinBuildSide,
+                                dedupParams,
+                                partitioner,
+                                k,
+                                buildCount, streamCount, resultCount, candidateCount);
+                nonFinalKnnLists2 = spatialCircles.spatialPartitionedRDD.zipPartitions(rightRDD.spatialPartitionedRDD, rangeJudgement);
+            }
+        } else {
+            final RangeNestedLoopJudgement rangeJudgement =
+                    new RangeNestedLoopJudgement(dedupParams, partitioner, k);
+            nonFinalKnnLists2 = spatialCircles.spatialPartitionedRDD.zipPartitions(rightRDD.spatialPartitionedRDD, rangeJudgement);
+        }
+
+
+
+        JavaPairRDD<U, Pair<U,KnnData<T>>> nonFinalKnnData = nonFinalKnnLists.union(nonFinalKnnLists2).mapToPair((PairFunction<Pair<U, KnnData<T>>, U, Pair<U,KnnData<T>>>) pair -> new Tuple2<>(pair.getKey(), Pair.of(pair.getKey(),pair.getValue())));
+
+        JavaPairRDD<U, List<T>> nonFinalKnnResults = nonFinalKnnData.combineByKey(
+                uKnnDataPair -> {
+                    PriorityQueue<T> pq = new PriorityQueue<T>(k, new GeometryDistanceComparator(uKnnDataPair.getLeft(), false));
+                    for (T curpoint : uKnnDataPair.getRight().neighbors) {
+                        if(curpoint==null)
+                            System.out.println(curpoint);
+                        pq.offer(curpoint);
+                    }
+                    return pq;
+                },
+                ( pq, pair )-> {
+                    for(T curpoint: pair.getRight().neighbors){
+                        pq.offer(curpoint);
+                        if(pq.size()>k){
+                            pq.poll();
+                        }
+
+                    }
+                    return pq;
+                },
+                ( pq, pq_other )-> {
+                    while(!pq_other.isEmpty()){
+                        pq.offer(pq_other.poll());
+                        if(pq.size()>k){
+                            pq.poll();
+                        }
+
+                    }
+                    return pq;
+                }
+
+        ).mapToPair((PairFunction<Tuple2<U, PriorityQueue<T>>, U, List<T>>) pair -> new Tuple2<U, List<T>>(pair._1(), new ArrayList<T>(pair._2)));
+
+        JavaPairRDD<U, List<T>> finalKnnResults = finalKnnLists.mapToPair((PairFunction<Pair<U, KnnData<T>>, U, List<T>>) pair -> new Tuple2<U, List<T>>(pair.getKey(), pair.getValue().neighbors));
+
+        JavaPairRDD<U, List<T>> result = finalKnnResults.union(nonFinalKnnResults);
+
+        return result;
+
     }
 
 }

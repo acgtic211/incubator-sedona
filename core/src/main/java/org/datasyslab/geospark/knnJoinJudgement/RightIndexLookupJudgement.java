@@ -17,7 +17,6 @@
 
 package org.datasyslab.geospark.knnJoinJudgement;
 
-import com.vividsolutions.jts.geom.Envelope;
 import com.vividsolutions.jts.geom.Geometry;
 import com.vividsolutions.jts.index.SpatialIndex;
 import com.vividsolutions.jts.index.strtree.GeometryItemDistance;
@@ -27,6 +26,7 @@ import org.apache.spark.api.java.function.FlatMapFunction2;
 import org.datasyslab.geospark.geometryObjects.Circle;
 import org.datasyslab.geospark.joinJudgement.DedupParams;
 import org.datasyslab.geospark.spatialPartitioning.SpatialPartitioner;
+import scala.Tuple2;
 
 import javax.annotation.Nullable;
 import java.io.Serializable;
@@ -44,7 +44,7 @@ public class RightIndexLookupJudgement<T extends Geometry, U extends Geometry>
      */
     public RightIndexLookupJudgement(@Nullable DedupParams dedupParams, SpatialPartitioner partitioner, int k)
     {
-        super(true, dedupParams, k);
+        super(true, dedupParams, partitioner, k);
         this.partitioner = partitioner;
     }
 
@@ -64,25 +64,10 @@ public class RightIndexLookupJudgement<T extends Geometry, U extends Geometry>
         if (treeIndex instanceof STRtree) {
             while (streamShapes.hasNext()) {
                 T streamShape = streamShapes.next();
-                final MaxHeap<U> localK = new MaxHeap<U>(k);
-                Object[] topk = ((STRtree) treeIndex).kNearestNeighbour(streamShape.getEnvelopeInternal(), streamShape, geometryItemDistance, this.k);
-                for (int i = 0; i < topk.length; i++) {
-                    GeometryWithDistance<U> geom = new GeometryWithDistance<U>((U)topk[i], streamShape);
-                    localK.add(geom);
-                }
 
-                double maxDistance = localK.getMaxDistance();
-                boolean isFinal = localK.size() == k;
-                if(isFinal) {
-                    Circle circle = new Circle(streamShape, maxDistance);
-                    for (Envelope grid : this.partitioner.getGrids()) {
-                        if (circle.getEnvelopeInternal().intersects(grid)) {
-                            isFinal = false;
-                            break;
-                        }
-                    }
-                }
-                result.add(Pair.of(streamShape, new KnnData<U>(localK, isFinal)));
+                KnnData<U> knnData = (KnnData<U>) calculateKnnData((STRtree) treeIndex, streamShape, geometryItemDistance, true);
+
+                result.add(Pair.of(streamShape, knnData));
             }
         }
         else {

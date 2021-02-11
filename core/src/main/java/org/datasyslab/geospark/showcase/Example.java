@@ -385,7 +385,7 @@ public class Example
         objectRDD.spatialPartitionedRDD.persist(StorageLevel.MEMORY_ONLY());
         queryRDD.spatialPartitionedRDD.persist(StorageLevel.MEMORY_ONLY());
         for (int i = 0; i < eachQueryLoopTimes; i++) {
-            long resultSize = KnnJoinQuery.KnnJoinQuery(objectRDD, queryRDD, 2,true, true).count();
+            long resultSize = KnnJoinQuery.KnnJoinQuery(objectRDD, queryRDD, 2,true, true, joinQueryPartitioningType).count();
             assert resultSize > 0;
         }
     }

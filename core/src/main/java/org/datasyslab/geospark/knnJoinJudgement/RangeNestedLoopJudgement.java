@@ -16,7 +16,6 @@
  */
 package org.datasyslab.geospark.knnJoinJudgement;
 
-import com.vividsolutions.jts.geom.Envelope;
 import com.vividsolutions.jts.geom.Geometry;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.log4j.LogManager;
@@ -24,7 +23,6 @@ import org.apache.log4j.Logger;
 import org.apache.spark.api.java.function.FlatMapFunction2;
 import org.datasyslab.geospark.geometryObjects.Circle;
 import org.datasyslab.geospark.joinJudgement.DedupParams;
-import org.datasyslab.geospark.knnJudgement.GeometryDistanceComparator;
 import org.datasyslab.geospark.spatialPartitioning.SpatialPartitioner;
 
 import javax.annotation.Nullable;
@@ -32,24 +30,23 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.PriorityQueue;
 
-public class NestedLoopJudgement<T extends Geometry, U extends Geometry>
+public class RangeNestedLoopJudgement<T extends Geometry, U extends Geometry>
         extends JudgementBase
-        implements FlatMapFunction2<Iterator<T>, Iterator<U>, Pair<T, KnnData<U>>>, Serializable
+        implements FlatMapFunction2<Iterator<Circle>, Iterator<U>, Pair<T, KnnData<U>>>, Serializable
 {
-    private static final Logger log = LogManager.getLogger(NestedLoopJudgement.class);
+    private static final Logger log = LogManager.getLogger(RangeNestedLoopJudgement.class);
 
     /**
      * @see JudgementBase
      */
-    public NestedLoopJudgement(@Nullable DedupParams dedupParams, SpatialPartitioner partitioner, int k)
+    public RangeNestedLoopJudgement(@Nullable DedupParams dedupParams, SpatialPartitioner partitioner, int k)
     {
         super(true, dedupParams, partitioner, k);
     }
 
     @Override
-    public Iterator<Pair<T, KnnData<U>>> call(Iterator<T> iteratorObject, Iterator<U> iteratorTraining)
+    public Iterator<Pair<T, KnnData<U>>> call(Iterator<Circle> iteratorObject, Iterator<U> iteratorTraining)
             throws Exception
     {
         initPartition();
@@ -61,8 +58,14 @@ public class NestedLoopJudgement<T extends Geometry, U extends Geometry>
         }
 
         while (iteratorObject.hasNext()) {
-            T streamShape = iteratorObject.next();
-            KnnData<U> knnData = (KnnData<U>) calculateKnnData(trainingObjects, streamShape, true);
+            Circle circle = iteratorObject.next();
+            T streamShape = (T) circle.getCenterGeometry();
+
+            if(contains(streamShape)){
+                continue;
+            }
+
+            KnnData<U> knnData = (KnnData<U>) calculateKnnData(trainingObjects, streamShape, false);
             result.add(Pair.of(streamShape, knnData));
         }
         return result.iterator();

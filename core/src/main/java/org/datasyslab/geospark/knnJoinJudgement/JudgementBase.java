@@ -17,15 +17,22 @@
 package org.datasyslab.geospark.knnJoinJudgement;
 
 import com.vividsolutions.jts.geom.*;
+import com.vividsolutions.jts.index.strtree.GeometryItemDistance;
+import com.vividsolutions.jts.index.strtree.STRtree;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 import org.apache.spark.TaskContext;
+import org.datasyslab.geospark.geometryObjects.Circle;
 import org.datasyslab.geospark.joinJudgement.DedupParams;
+import org.datasyslab.geospark.knnJudgement.GeometryDistanceComparator;
+import org.datasyslab.geospark.spatialPartitioning.SpatialPartitioner;
 import org.datasyslab.geospark.utils.HalfOpenRectangle;
 
 import javax.annotation.Nullable;
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.PriorityQueue;
 
 /**
  * Base class for partition level join implementations.
@@ -55,18 +62,21 @@ abstract class JudgementBase
     private final boolean considerBoundaryIntersection;
     private final DedupParams dedupParams;
     protected final int k;
+    private final SpatialPartitioner partitioner;
 
     transient private HalfOpenRectangle extent;
 
     /**
      * @param considerBoundaryIntersection true for 'intersects', false for 'contains' join condition
      * @param dedupParams Optional information to activate de-dup logic
+     * @param partitioner
      * @param k
      */
-    protected JudgementBase(boolean considerBoundaryIntersection, @Nullable DedupParams dedupParams, int k)
+    protected JudgementBase(boolean considerBoundaryIntersection, @Nullable DedupParams dedupParams, SpatialPartitioner partitioner, int k)
     {
         this.considerBoundaryIntersection = considerBoundaryIntersection;
         this.dedupParams = dedupParams;
+        this.partitioner = partitioner;
         this.k = k ;
     }
 
@@ -131,5 +141,84 @@ abstract class JudgementBase
     {
         //log.warn("Check "+left.toText()+" with "+right.toText());
         return considerBoundaryIntersection ? left.intersects(right) : left.covers(right);
+    }
+
+    protected boolean contains(Geometry geometry){
+        if(extent != null){
+            return extent.contains(geometry.getCentroid());
+        }
+        return false;
+    }
+
+    protected boolean isFinal(Geometry streamShape, double maxDistance) {
+        boolean isFinal = true;
+        if(maxDistance == Double.NEGATIVE_INFINITY)
+            return true;
+        final Circle circle = new Circle(streamShape, maxDistance);
+        final List<Envelope> partitions = this.partitioner.getGrids();
+        final int thisPartition = TaskContext.getPartitionId();
+        for(int n = 0; n < partitions.size(); n++) {
+            if(thisPartition == n)
+                continue;
+            Envelope grid = partitions.get(n);
+            if (circle.getEnvelopeInternal().intersects(grid)) {
+                isFinal = false;
+                break;
+            }
+        }
+        return isFinal;
+    }
+
+    protected KnnData<Geometry> calculateKnnData(STRtree treeIndex, Geometry streamShape, GeometryItemDistance geometryItemDistance, boolean checkOverlaps) {
+
+        Object[] topk = null;
+
+        try{
+            topk = treeIndex.kNearestNeighbour(streamShape.getEnvelopeInternal(), streamShape, geometryItemDistance, this.k);
+            List<Geometry> localK = new ArrayList<>(topk.length);
+
+            double maxDistance = Double.NEGATIVE_INFINITY;
+
+            for (int i = 0; i < topk.length; i++) {
+                maxDistance = Math.max(maxDistance,streamShape.distance((Geometry) topk[i]));
+                localK.add((Geometry) topk[i]);
+            }
+
+            boolean isFinal = !checkOverlaps || isFinal(streamShape, maxDistance);
+
+            return new KnnData<>(localK, isFinal, maxDistance);
+
+        }catch (Exception e){
+            return new KnnData<>(new ArrayList<>(), true, Double.NEGATIVE_INFINITY);
+        }
+
+
+
+    }
+
+    protected KnnData<Geometry> calculateKnnData(List<Geometry> trainingObjects, Geometry streamShape, boolean checkOverlaps) {
+        PriorityQueue<Geometry> pq = new PriorityQueue<Geometry>(k, new GeometryDistanceComparator(streamShape, false));
+        double maxDistance = Double.NEGATIVE_INFINITY;
+        for (Geometry curpoint : trainingObjects) {
+            double distance = curpoint.distance(streamShape);
+            if (pq.size() < k) {
+                pq.offer(curpoint);
+                maxDistance = Math.max(maxDistance, distance);
+            }
+            else {
+                if (maxDistance > distance) {
+                    pq.poll();
+                    pq.offer(curpoint);
+                }
+                maxDistance = pq.peek().distance(streamShape);
+            }
+        }
+        ArrayList<Geometry> res = new ArrayList<>(pq.size());
+        for (int i = 0; i < k; i++) {
+            res.add(pq.poll());
+        }
+
+        boolean isFinal = !checkOverlaps || isFinal(streamShape, maxDistance);
+        return new KnnData<>(res, isFinal, maxDistance);
     }
 }
