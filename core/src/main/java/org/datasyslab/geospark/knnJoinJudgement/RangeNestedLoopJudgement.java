@@ -16,6 +16,7 @@
  */
 package org.datasyslab.geospark.knnJoinJudgement;
 
+import com.vividsolutions.jts.geom.Envelope;
 import com.vividsolutions.jts.geom.Geometry;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.log4j.LogManager;
@@ -28,6 +29,7 @@ import org.datasyslab.geospark.spatialPartitioning.SpatialPartitioner;
 import javax.annotation.Nullable;
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 
@@ -57,6 +59,21 @@ public class RangeNestedLoopJudgement<T extends Geometry, U extends Geometry>
             trainingObjects.add(iteratorTraining.next());
         }
 
+        Comparator<Geometry> comparator = new Comparator<Geometry>() {
+            @Override
+            public int compare(Geometry o1, Geometry o2) {
+                Envelope rect_o1, rect_o2;
+                rect_o1 = o1.getEnvelopeInternal();
+                rect_o2 = o2.getEnvelopeInternal();
+                if (rect_o1.getMinX() == rect_o2.getMinX())
+                    return 0;
+                return rect_o1.getMinX() < rect_o2.getMinX() ? -1 : 1;
+            }
+        };
+
+
+        trainingObjects.sort(comparator);
+
         while (iteratorObject.hasNext()) {
             Circle circle = iteratorObject.next();
             T streamShape = (T) circle.getCenterGeometry();
@@ -65,8 +82,9 @@ public class RangeNestedLoopJudgement<T extends Geometry, U extends Geometry>
                 continue;
             }
 
-            KnnData<U> knnData = (KnnData<U>) calculateKnnData(trainingObjects, streamShape, false);
-            result.add(Pair.of(streamShape, knnData));
+            KnnData<U> knnData = (KnnData<U>) calculateKnnDataSorted(trainingObjects, streamShape, false, circle.getRadius());
+            if(knnData.distance != Double.NEGATIVE_INFINITY)
+                result.add(Pair.of(streamShape, knnData));
         }
         return result.iterator();
     }

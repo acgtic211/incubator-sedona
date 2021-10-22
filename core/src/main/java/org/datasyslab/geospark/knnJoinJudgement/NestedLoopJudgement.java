@@ -59,10 +59,24 @@ public class NestedLoopJudgement<T extends Geometry, U extends Geometry>
         while (iteratorTraining.hasNext()) {
             trainingObjects.add(iteratorTraining.next());
         }
+        Comparator<Geometry> comparator = new Comparator<Geometry>() {
+            @Override
+            public int compare(Geometry o1, Geometry o2) {
+                Envelope rect_o1, rect_o2;
+                rect_o1 = o1.getEnvelopeInternal();
+                rect_o2 = o2.getEnvelopeInternal();
+                if (rect_o1.getMinX() == rect_o2.getMinX())
+                    return 0;
+                return rect_o1.getMinX() < rect_o2.getMinX() ? -1 : 1;
+            }
+        };
+
+
+        trainingObjects.sort(comparator);
 
         while (iteratorObject.hasNext()) {
             T streamShape = iteratorObject.next();
-            KnnData<U> knnData = (KnnData<U>) calculateKnnData(trainingObjects, streamShape, true);
+            KnnData<U> knnData = (KnnData<U>) calculateKnnDataSorted(trainingObjects, streamShape, true, null);
             result.add(Pair.of(streamShape, knnData));
         }
         return result.iterator();

@@ -213,8 +213,146 @@ abstract class JudgementBase
                 maxDistance = pq.peek().distance(streamShape);
             }
         }
-        ArrayList<Geometry> res = new ArrayList<>(pq.size());
-        for (int i = 0; i < k; i++) {
+        ArrayList<Geometry> res = new ArrayList<>();
+        while(!pq.isEmpty()){
+            res.add(pq.poll());
+        }
+
+        boolean isFinal = !checkOverlaps || isFinal(streamShape, maxDistance);
+        return new KnnData<>(res, isFinal, maxDistance);
+    }
+
+    public KnnData<Geometry> calculateKnnDataSorted(List<Geometry> trainingObjects, Geometry streamShape, boolean checkOverlaps, Double distances) {
+        PriorityQueue<Geometry> pq = new PriorityQueue<Geometry>(k, new GeometryDistanceComparator(streamShape, false));
+
+        double maxDistance = Double.NEGATIVE_INFINITY;
+
+        final Geometry r = streamShape;
+        Envelope rect_r = r.getEnvelopeInternal();
+        List<Geometry> S = trainingObjects;
+        if(trainingObjects.size()>0) {
+            int left = 0;
+            int right = S.size() - 1;
+            int m = 0;
+            Geometry s;
+            Envelope rect_s;
+            while (left <= right) {
+                m = (left + right) / 2;
+                //    	  If Am = T, the search is done; return m.
+                //    			  If Am < T, set L to m + 1 and go to step 2.
+                //    			  If Am > T, set R to m - 1 and go to step 2.
+                s = S.get(m);
+                rect_s = s.getEnvelopeInternal();
+
+                if (rect_s.getMinX() == rect_r.getMinX()) {
+                    break;
+                } else {
+                    if (rect_s.getMinX() < rect_r.getMinX()) {
+                        left = m + 1;
+                    } else {
+                        right = m - 1;
+                    }
+                }
+
+            }
+
+            int pl, pr;
+
+            if (m < 0) {
+                m = 0;
+                pl = m;
+                pr = m + 1;
+            } else if (m > S.size() - 1) {
+                m = S.size() - 1;
+                pl = m - 1;
+                pr = m;
+            } else {
+                pl = m;
+                pr = m + 1;
+            }
+
+            double gdmax = Double.POSITIVE_INFINITY;
+            if(distances!=null){
+                gdmax = distances;
+            }
+            boolean flagPL = pl < 0;
+            boolean flagPR = pr > S.size() - 1;
+
+            while (!flagPL || !flagPR) {
+                if (!flagPL) {
+                    s = S.get(pl);
+                    rect_s = s.getEnvelopeInternal();
+
+                    double dx = Math.abs(rect_r.getMinX() - rect_s.getMinX());
+                    if (dx > gdmax || (dx == gdmax && pq.size()==k)) {
+                        flagPL = true;
+                        continue;
+                    }
+
+                    double dy = Math.abs(rect_r.getMinY() - rect_s.getMinY());
+                    if (dy > gdmax || (dy == gdmax && pq.size()==k)) {
+                        pl--;
+                        flagPL = pl < 0;
+                        continue;
+                    }
+
+                    double dist = rect_r.distance(rect_s);
+                    if(dist < gdmax || (dist == gdmax && !(pq.size()==k))){
+                        pq.offer(s);
+                        if(pq.size()>k){
+                            pq.poll();
+                        }
+                        if (pq.size()==k) {
+                            gdmax = rect_r.distance(pq.peek().getEnvelopeInternal());
+                        }
+                    }
+
+                    pl--;
+                    flagPL = pl < 0;
+                }
+
+                if (!flagPR) {
+                    s = S.get(pr);
+                    rect_s = s.getEnvelopeInternal();
+                    double dx = Math.abs(rect_r.getMinX() - rect_s.getMinX());
+
+                    if (dx > gdmax || (dx == gdmax && pq.size()==k)) {
+                        flagPR = true;
+                        continue;
+                    }
+
+                    double dy = Math.abs(rect_r.getMinY() - rect_s.getMinY());
+                    if (dy > gdmax || (dy == gdmax && pq.size()==k)) {
+                        pr++;
+                        flagPR = pr > S.size() - 1;
+                        continue;
+                    }
+
+                    double dist = rect_r.distance(rect_s);
+                    if(dist < gdmax || (dist == gdmax && !(pq.size()==k))){
+                        pq.offer(s);
+                        if(pq.size()>k){
+                            pq.poll();
+                        }
+                        if (pq.size()==k) {
+                            gdmax = rect_r.distance(pq.peek().getEnvelopeInternal());
+                        }
+                    }
+
+                    pr++;
+                    flagPR = pr > S.size() - 1;
+                }
+
+            }
+
+        }
+
+        if(pq.isEmpty())
+            return new KnnData<>(new ArrayList<>(), true, Double.NEGATIVE_INFINITY);
+
+        maxDistance = pq.peek().distance(streamShape);
+        ArrayList<Geometry> res = new ArrayList<>();
+        while(!pq.isEmpty()){
             res.add(pq.poll());
         }
 
