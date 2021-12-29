@@ -25,6 +25,7 @@ import org.apache.log4j.Logger;
 import org.apache.sedona.core.geometryObjects.Circle;
 import org.apache.sedona.core.geometryObjects.GeometrySerde;
 import org.apache.sedona.core.geometryObjects.SpatialIndexSerde;
+import org.apache.sedona.core.kcpJudgement.KCPObjects;
 import org.apache.spark.serializer.KryoRegistrator;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.GeometryCollection;
@@ -65,5 +66,6 @@ public class SedonaKryoRegistrator
         kryo.register(Quadtree.class, indexSerializer);
         kryo.register(STRtree.class, indexSerializer);
         kryo.register(KnnData.class, new FieldSerializer(kryo, KnnData.class));
+        kryo.register(KCPObjects.class, new FieldSerializer(kryo, KCPObjects.class));
     }
 }
