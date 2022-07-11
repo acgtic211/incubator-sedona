@@ -109,6 +109,8 @@ public class NewKCPQ
 
     private static Double sample;
 
+    private static boolean combi;
+
     /**
      * The main method.
      *
@@ -147,9 +149,11 @@ public class NewKCPQ
 
         PointRDDIndexType = null;
 
-        partitions = args.length >= 6 ? Integer.parseInt(args[4]) : null;
+        partitions = args.length >= 5 ? Integer.parseInt(args[4]) : null;
 
-        sample = args.length == 7 ? Double.parseDouble(args[5]) : 0.001;
+        sample = args.length >= 6 ? Double.parseDouble(args[5]) : 0.001;
+
+        combi = args.length >= 7 ? "true".equals(args[6]) : false;
 
         try {
             testKCPQueryUsingIndex();
@@ -179,7 +183,16 @@ public class NewKCPQ
         PointRDD queryRDD = new PointRDD(sc, PointRDD2InputLocation, PointRDDOffset, PointRDDSplitter, true, partitions);
 
         System.out.println("Partitioning "+PointRDDInputLocation);
-        objectRDD.spatialPartitioning(joinQueryPartitioningType);
+
+        if(combi) {
+            System.out.println("with P and Q");
+            queryRDD.analyze();
+            objectRDD.spatialPartitioning(joinQueryPartitioningType, queryRDD);
+        }
+        else {
+            System.out.println("with Q");
+            objectRDD.spatialPartitioning(joinQueryPartitioningType);
+        }
 
         for (int i = 0; i < eachQueryLoopTimes; i++) {
             System.out.println("Joining");

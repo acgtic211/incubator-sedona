@@ -19,6 +19,7 @@
 
 package org.apache.sedona.core.spatialPartitioning;
 
+import org.apache.sedona.core.geometryObjects.Circle;
 import org.apache.sedona.core.utils.HalfOpenRectangle;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
@@ -42,7 +43,7 @@ public class KDB extends PartitioningUtils
         implements Serializable
 {
 
-    private final int maxItemsPerNode;
+    private int maxItemsPerNode;
     private final int maxLevels;
     private final Envelope extent;
     private final int level;
@@ -118,6 +119,19 @@ public class KDB extends PartitioningUtils
         }
     }
 
+    public void setMaxElementsPerNode(int maxItemsPerNode)
+    {
+        traverse(new Visitor()
+        {
+            @Override
+            public boolean visit(KDB tree)
+            {
+                tree.maxItemsPerNode = maxItemsPerNode;
+                return true;
+            }
+        });
+    }
+
     public void dropElements()
     {
         traverse(new Visitor()
@@ -148,6 +162,24 @@ public class KDB extends PartitioningUtils
                 else {
                     return false;
                 }
+            }
+        });
+
+        return matches;
+    }
+
+    public List<KDB> findLeafNodes()
+    {
+        final List<KDB> matches = new ArrayList<>();
+        traverse(new Visitor()
+        {
+            @Override
+            public boolean visit(KDB tree)
+            {
+                if (tree.isLeaf()) {
+                    matches.add(tree);
+                }
+                return true;
             }
         });
 
@@ -276,6 +308,13 @@ public class KDB extends PartitioningUtils
             // For points, make sure to return only one partition
             if (point != null && !(new HalfOpenRectangle(leaf.getExtent())).contains(point)) {
                 continue;
+            }
+
+            if(geometry instanceof Circle) {
+                Circle circle = (Circle) geometry;
+                if(new HalfOpenRectangle(leaf.getExtent()).contains(circle.getCenterGeometry().getCentroid())) {
+                    continue;
+                }
             }
 
             result.add(new Tuple2(leaf.getLeafId(), geometry));

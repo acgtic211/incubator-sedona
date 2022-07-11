@@ -35,7 +35,7 @@ import java.util.List;
 
 public class RangeRightIndexLookupJudgement<T extends Geometry, U extends Geometry>
         extends JudgementBase
-        implements FlatMapFunction2<Iterator<Circle>, Iterator<SpatialIndex>, Pair<T, KnnData<U>>>, Serializable
+        implements FlatMapFunction2<Iterator<Circle>, Iterator<SpatialIndex>, Pair<T, List<U>>>, Serializable
 {
 
     private final SpatialPartitioner partitioner;
@@ -50,10 +50,10 @@ public class RangeRightIndexLookupJudgement<T extends Geometry, U extends Geomet
     }
 
     @Override
-    public Iterator<Pair<T, KnnData<U>>> call(Iterator<Circle> streamShapes, Iterator<SpatialIndex> indexIterator)
+    public Iterator<Pair<T, List<U>>> call(Iterator<Circle> streamShapes, Iterator<SpatialIndex> indexIterator)
             throws Exception
     {
-        List<Pair<T, KnnData<U>>> result = new ArrayList<>();
+        List<Pair<T, List<U>>> result = new ArrayList<>();
 
         if (!indexIterator.hasNext() || !streamShapes.hasNext()) {
             return result.iterator();
@@ -68,11 +68,11 @@ public class RangeRightIndexLookupJudgement<T extends Geometry, U extends Geomet
                 Circle circle = streamShapes.next();
                 T streamShape = (T) circle.getCenterGeometry();
 
-                if(contains(streamShape)){
+                /*if(contains(streamShape)){
                     continue;
-                }
+                }*/
 
-                KnnData<U> knnData = (KnnData<U>) calculateKnnData((STRtree) treeIndex, streamShape, geometryItemDistance, false);
+                final List knnData = calculateKnnData((STRtree) treeIndex, streamShape, geometryItemDistance, circle.getRadius());
 
                 result.add(Pair.of(streamShape, knnData));
             }

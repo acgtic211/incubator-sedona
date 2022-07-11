@@ -33,7 +33,7 @@ public class TestBase
 
     protected static void initialize(final String testSuiteName)
     {
-        conf = new SparkConf().setAppName(testSuiteName).setMaster("local[2]");
+        conf = new SparkConf().setAppName(testSuiteName).setMaster("local[8]");
         conf.set("spark.serializer", KryoSerializer.class.getName());
         conf.set("spark.kryo.registrator", SedonaKryoRegistrator.class.getName());
 

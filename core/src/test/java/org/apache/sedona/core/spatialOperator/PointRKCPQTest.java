@@ -25,32 +25,39 @@
  */
 package org.apache.sedona.core.spatialOperator;
 
-import org.locationtech.jts.geom.Geometry;
-import org.locationtech.jts.geom.Point;
-import org.apache.sedona.core.spatialOperator.KnnJoinQuery;
-import org.apache.spark.api.java.function.Function2;
+import org.apache.hadoop.util.PriorityQueue;
 import org.apache.sedona.core.enums.GridType;
 import org.apache.sedona.core.enums.IndexType;
-import org.apache.sedona.core.enums.JoinBuildSide;
+import org.apache.sedona.core.enums.KCPQAlgorithm;
+import org.apache.sedona.core.kcpJudgement.DistanceAndPair;
+import org.apache.sedona.core.kcpJudgement.KCPQueryUtils;
+import org.apache.sedona.core.spatialPartitioning.*;
+import org.apache.sedona.core.spatialPartitioning.quadtree.StandardQuadTree;
 import org.apache.sedona.core.spatialRDD.PointRDD;
-import org.apache.sedona.core.spatialRDD.PolygonRDD;
-import org.apache.sedona.core.spatialRDD.RectangleRDD;
 import org.apache.sedona.core.spatialRDD.SpatialRDD;
+import org.apache.sedona.core.utils.RDDSampleUtils;
+import org.apache.sedona.core.utils.TimeUtils;
+import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.Function2;
+import org.apache.spark.util.random.SamplingUtils;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
+import org.locationtech.jts.geom.Envelope;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.Point;
 import scala.Tuple2;
 
+import java.io.Serializable;
 import java.util.*;
 
 import static org.junit.Assert.assertEquals;
 
 @RunWith(Parameterized.class)
-public class PointKnnJoinTest
-        extends JoinTestBase
-{
+public class PointRKCPQTest
+        extends JoinTestBase implements Serializable {
 
     private static long expectedRectangleMatchCount;
     private static long expectedRectangleMatchWithOriginalDuplicatesCount;
@@ -59,17 +66,16 @@ public class PointKnnJoinTest
 
     int k;
 
-    public PointKnnJoinTest(GridType gridType, int numPartitions, int k)
-    {
+    public PointRKCPQTest(GridType gridType, int numPartitions, int k) {
         super(gridType, numPartitions);
         this.k = k;
     }
 
     @Parameterized.Parameters
-    public static Collection testParams()
-    {
-        return Arrays.asList(new Object[][] {
-                {GridType.KDBTREE, 10, 10},
+    public static Collection testParams() {
+        return Arrays.asList(new Object[][]{
+                {GridType.KDBTREE, 10, 10000}, //100000 113732
+                //{GridType.QUADTREE, 10, 10},
         });
     }
 
@@ -77,8 +83,7 @@ public class PointKnnJoinTest
      * Once executed before all.
      */
     @BeforeClass
-    public static void onceExecutedBeforeAll()
-    {
+    public static void onceExecutedBeforeAll() {
         initialize("PointJoin", "point.test.properties");
         expectedRectangleMatchCount = Long.parseLong(prop.getProperty("rectangleMatchCount"));
         expectedRectangleMatchWithOriginalDuplicatesCount =
@@ -92,11 +97,9 @@ public class PointKnnJoinTest
      * Tear down.
      */
     @AfterClass
-    public static void TearDown()
-    {
+    public static void TearDown() {
         sc.stop();
     }
-
 
 
     /**
@@ -105,64 +108,70 @@ public class PointKnnJoinTest
      * @throws Exception the exception
      */
     @Test
-    public void testRTreeWithPoints()
-            throws Exception
-    {
+    public void test()
+            throws Exception {
         PointRDD queryRDD = createQueryRDD();
-        testIndexInt(queryRDD, IndexType.RTREE, true, expectedRectangleMatchCount);
+        testIndexInt(queryRDD, null, false, expectedRectangleMatchCount);
+
+
+        //local();
+    }
+
+    private DistanceAndPair<Point, Point> local() {
+        PointRDD queryRDD2 = createQueryRDD();
+        PointRDD spatialRDD = createPointRDD();
+
+        List<Point> query = queryRDD2.rawSpatialRDD.sortBy(t -> t.getCentroid().getX(), true, 1)
+                .collect();
+        List<Point> spatial = spatialRDD.rawSpatialRDD.sortBy(t -> t.getCentroid().getX(), true, 1)
+                .collect();
+
+        PriorityQueue<DistanceAndPair<Point, Point>> result = KCPQueryUtils.reverseKCPQuery(spatial, query, this.k, KCPQAlgorithm.REVERSE_FULL, null, null);
+        return result.top();
     }
 
     private void testIndexInt(SpatialRDD<Point> queryRDD, IndexType indexType, boolean useIndex, long expectedCount)
-            throws Exception
-    {
+            throws Exception {
+        long startTime = System.currentTimeMillis();
+
         PointRDD spatialRDD = createPointRDD();
 
         //partitionRdds(queryRDD, spatialRDD);
-
-        spatialRDD.spatialPartitioning(gridType, queryRDD);
+        spatialRDD.spatialPartitioning(gridType);
         queryRDD.spatialPartitioning(spatialRDD.getPartitioner());
 
-        if(indexType!=null)
+        /*System.out.println(spatialRDD.rawSpatialRDD.mapPartitionsWithIndex(elementsPerPartition(), true).collect().toString());
+
+        System.out.println(queryRDD.rawSpatialRDD.mapPartitionsWithIndex(elementsPerPartition(), true).collect().toString());*/
+        if (indexType != null)
             spatialRDD.buildIndex(indexType, true);
 
-        //System.out.println(queryRDD.spatialPartitionedRDD.mapPartitionsWithIndex(elementsPerPartition(), false).collect().toString());
+        List<DistanceAndPair<Point, Point>> result = KCPQuery.KClosestPairsQuery(spatialRDD, queryRDD, false, this.k, KCPQAlgorithm.REVERSE_FULL, 0.001);
+        assertEquals(k, result.size());
+        System.out.println(TimeUtils.elapsedSince(startTime));
+        /*startTime = System.currentTimeMillis();
+        assertEquals(result.get(0).toString(), local().toString());
+        System.out.println(TimeUtils.elapsedSince(startTime));*/
 
-        //System.out.println(spatialRDD.spatialPartitionedRDD.mapPartitionsWithIndex(elementsPerPartition(), false).collect().toString());
-
-        List<Tuple2<Point, List<Point>>> result = KnnJoinQuery.KnnJoinQuery(spatialRDD, queryRDD, k, useIndex, true, gridType).collect();
-        System.out.println(countKNNJoinResults(result));
-        //sanityCheckJoinResults(result);
-        //assertEquals(expectedCount, countJoinResults(result));
     }
 
-    private Function2<Integer, Iterator<Point>, Iterator<Integer>> elementsPerPartition() {
+    private Function2<Integer, Iterator<Point>, Iterator<Tuple2<Integer, Integer>>> elementsPerPartition() {
         return (integer, pointIterator) -> {
-           int n = 0;
-           while(pointIterator.hasNext()) {
-               n++;
-               pointIterator.next();
-           }
-           return Collections.singletonList(n).iterator();
+            int n = 0;
+            while (pointIterator.hasNext()) {
+                n++;
+                pointIterator.next();
+            }
+            return Collections.singletonList(new Tuple2<>(integer, n)).iterator();
         };
     }
 
-    private PointRDD createPointRDD()
-    {
+    private PointRDD createPointRDD() {
         return createPointRDD(InputLocation);
     }
 
     private PointRDD createQueryRDD() {
         return createPointRDD(InputLocationQueryWindow);
-    }
-
-
-    protected <T extends Geometry, U extends Geometry> long countKNNJoinResults(List<Tuple2<U, List<T>>> results)
-    {
-        int count = 0;
-        for (final Tuple2<U, List<T>> tuple : results) {
-            count += tuple._2().size();
-        }
-        return count;
     }
 
 }

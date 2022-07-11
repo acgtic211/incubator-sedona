@@ -20,6 +20,7 @@
 package org.apache.sedona.core.spatialPartitioning.quadtree;
 
 import org.apache.commons.lang3.mutable.MutableInt;
+import org.apache.sedona.core.geometryObjects.Circle;
 import org.apache.sedona.core.spatialPartitioning.PartitioningUtils;
 import org.apache.sedona.core.utils.HalfOpenRectangle;
 import org.locationtech.jts.geom.Envelope;
@@ -456,6 +457,13 @@ public class StandardQuadTree<T> extends PartitioningUtils
             // For points, make sure to return only one partition
             if (point != null && !(new HalfOpenRectangle(rectangle.getEnvelope())).contains(point)) {
                 continue;
+            }
+
+            if(geometry instanceof Circle) {
+                Circle circle = (Circle) geometry;
+                if(new HalfOpenRectangle(rectangle.getEnvelope()).contains(circle.getCenterGeometry().getCentroid())) {
+                    continue;
+                }
             }
 
             result.add(new Tuple2(rectangle.partitionId, geometry));

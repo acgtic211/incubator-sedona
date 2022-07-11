@@ -59,4 +59,9 @@ public class KDBTreePartitioner
     {
         return new DedupParams(grids);
     }
+
+    public KDB getKDB()
+    {
+        return tree;
+    }
 }

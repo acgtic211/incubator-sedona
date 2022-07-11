@@ -204,7 +204,7 @@ public class SpatialRDD<T extends Geometry>
      * @return true, if successful
      * @throws Exception the exception
      */
-    public void calc_partitioner(GridType gridType, int numPartitions)
+    public <U extends Geometry> void calc_partitioner(GridType gridType, int numPartitions, SpatialRDD<U> other)
             throws Exception
     {
         if (numPartitions <= 0) {
@@ -247,6 +247,31 @@ public class SpatialRDD<T extends Geometry>
                 boundaryEnvelope.getMinX(), boundaryEnvelope.getMaxX() + 0.01,
                 boundaryEnvelope.getMinY(), boundaryEnvelope.getMaxY() + 0.01);
 
+        List<Envelope> samples2 = new ArrayList<>();
+
+        if (other != null) {
+            //Calculate the number of samples we need to take.
+            sampleNumberOfRecords = RDDSampleUtils.getSampleNumbers(numPartitions, other.approximateTotalCount, other.sampleNumber);
+            //Take Sample
+            // RDD.takeSample implementation tends to scan the data multiple times to gather the exact
+            // number of samples requested. Repeated scans increase the latency of the join. This increase
+            // is significant for large datasets.
+            // See https://github.com/apache/spark/blob/412b0e8969215411b97efd3d0984dc6cac5d31e0/core/src/main/scala/org/apache/spark/rdd/RDD.scala#L508
+            // Here, we choose to get samples faster over getting exactly specified number of samples.
+            final double fraction2 = SamplingUtils.computeFractionForSampleSize(sampleNumberOfRecords, other.approximateTotalCount, false);
+            samples2 = other.rawSpatialRDD.sample(false, fraction)
+                    .map(new Function<U, Envelope>() {
+                        @Override
+                        public Envelope call(U geometry)
+                                throws Exception {
+                            return geometry.getEnvelopeInternal();
+                        }
+                    })
+                    .collect();
+
+            logger.info("Collected " + samples.size() + " samples");
+        }
+
         switch (gridType) {
             case EQUALGRID: {
                 // Force the quad-tree to grow up to a certain level
@@ -259,16 +284,28 @@ public class SpatialRDD<T extends Geometry>
                 break;
             }
             case QUADTREE: {
+
+                if(samples2.size()>0){
+                    samples = new ArrayList<>(samples);
+                    samples.addAll(samples2);
+                }
+
                 QuadtreePartitioning quadtreePartitioning = new QuadtreePartitioning(samples, paddedBoundary, numPartitions);
                 StandardQuadTree tree = quadtreePartitioning.getPartitionTree();
                 partitioner = new QuadTreePartitioner(tree);
                 break;
             }
             case KDBTREE: {
-                final KDB tree = new KDB(samples.size() / numPartitions, numPartitions, paddedBoundary);
+
+                final KDB tree = new KDB((samples.size() + samples2.size())/ numPartitions, numPartitions, paddedBoundary);
                 for (final Envelope sample : samples) {
                     tree.insert(sample);
                 }
+
+                for (final Envelope sample : samples2) {
+                    tree.insert(sample);
+                }
+
                 tree.assignLeafIds();
                 partitioner = new KDBTreePartitioner(tree);
                 break;
@@ -279,10 +316,94 @@ public class SpatialRDD<T extends Geometry>
         }
     }
 
+    public <U extends Geometry> void calc_skewed_partitioner(int numPartitions, SpatialRDD<U> other)
+            throws Exception {
+        if (numPartitions <= 0) {
+            throw new IllegalArgumentException("Number of partitions must be >= 0");
+        }
+
+        if (this.boundaryEnvelope == null) {
+            throw new Exception("[AbstractSpatialRDD][spatialPartitioning] SpatialRDD boundary is null. Please call analyze() first.");
+        }
+        if (this.approximateTotalCount == -1) {
+            throw new Exception("[AbstractSpatialRDD][spatialPartitioning] SpatialRDD total count is unkown. Please call analyze() first.");
+        }
+
+        other.analyze();
+        //Calculate the number of samples we need to take.
+        int sampleNumberOfRecords = RDDSampleUtils.getSampleNumbers(numPartitions, other.approximateTotalCount, other.sampleNumber);
+        //Take Sample
+        // RDD.takeSample implementation tends to scan the data multiple times to gather the exact
+        // number of samples requested. Repeated scans increase the latency of the join. This increase
+        // is significant for large datasets.
+        // See https://github.com/apache/spark/blob/412b0e8969215411b97efd3d0984dc6cac5d31e0/core/src/main/scala/org/apache/spark/rdd/RDD.scala#L508
+        // Here, we choose to get samples faster over getting exactly specified number of samples.
+        final double fraction = SamplingUtils.computeFractionForSampleSize(sampleNumberOfRecords, other.approximateTotalCount, false);
+        List<Envelope> samples = other.rawSpatialRDD.sample(false, fraction)
+                .map(new Function<U, Envelope>()
+                {
+                    @Override
+                    public Envelope call(U geometry)
+                            throws Exception
+                    {
+                        return geometry.getEnvelopeInternal();
+                    }
+                })
+                .collect();
+
+        System.out.println("Collected " + samples.size() + " samples");
+
+        // Add some padding at the top and right of the boundaryEnvelope to make
+        // sure all geometries lie within the half-open rectangle.
+        final Envelope paddedBoundary = new Envelope(
+                boundaryEnvelope.getMinX(), boundaryEnvelope.getMaxX() + 0.01,
+                boundaryEnvelope.getMinY(), boundaryEnvelope.getMaxY() + 0.01);
+
+        if(this.partitioner instanceof KDBTreePartitioner) {
+
+            KDBTreePartitioner kdbTreePartitioner = (KDBTreePartitioner) this.partitioner;
+
+            KDB tree = kdbTreePartitioner.getKDB();
+            List<KDB> nodos = tree.findLeafNodes();
+            System.out.println("KDBTreePartitioner (Before): ");
+            for(KDB nodo : nodos) {
+                System.out.println(nodo.getLeafId()+ ": " + nodo.getItemCount());
+            }
+
+            tree.setMaxElementsPerNode(samples.size() / numPartitions);
+
+            for (final Envelope sample : samples) {
+                tree.insert(sample);
+            }
+
+            tree.assignLeafIds();
+
+            nodos = tree.findLeafNodes();
+            System.out.println("KDBTreePartitioner (after): ");
+            for(KDB nodo : nodos) {
+                System.out.println(nodo.getLeafId()+ ": " + nodo.getItemCount());
+            }
+
+            partitioner = new KDBTreePartitioner(tree);
+
+        } else {
+            throw new Exception("[AbstractSpatialRDD][spatialPartitioning] Unsupported spatial partitioning method. " +
+                    "Only KDBTree supported");
+        }
+    }
+
     public void spatialPartitioning(GridType gridType, int numPartitions)
             throws Exception
     {
-        calc_partitioner(gridType, numPartitions);
+        calc_partitioner(gridType, numPartitions, null);
+        this.spatialPartitionedRDD = partition(partitioner);
+    }
+
+    public <U extends Geometry> void spatialPartitioning(GridType gridType, SpatialRDD<U> other)
+            throws Exception
+    {
+        int numPartitions = this.rawSpatialRDD.rdd().partitions().length;
+        calc_partitioner(gridType, numPartitions, other);
         this.spatialPartitionedRDD = partition(partitioner);
     }
 

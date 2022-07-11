@@ -106,8 +106,11 @@ class JoinTestBase
         try {
             // load a properties file
             prop.load(input);
-            InputLocation = "file://" + classLoader.getResource(prop.getProperty("inputLocation")).getPath();
-            InputLocationQueryWindow = "file://" + classLoader.getResource(prop.getProperty("queryWindowSet")).getPath();
+            System.out.println(
+                    "file://" + prop.getProperty("inputLocation")
+            );
+            InputLocation = "file://" + prop.getProperty("inputLocation");
+            InputLocationQueryWindow = "file://" + prop.getProperty("queryWindowSet");
             InputLocationQueryPolygon = "file://" + classLoader.getResource(prop.getProperty("queryPolygonSet")).getPath();
             offset = Integer.parseInt(prop.getProperty("offset"));
             splitter = FileDataSplitter.getFileDataSplitter(prop.getProperty("splitter"));
@@ -130,7 +133,7 @@ class JoinTestBase
 
     protected PointRDD createPointRDD(String location)
     {
-        final PointRDD rdd = new PointRDD(sc, location, 1, splitter, false, numPartitions);
+        final PointRDD rdd = new PointRDD(sc, location, offset, splitter, false, numPartitions);
         return new PointRDD(rdd.rawSpatialRDD, StorageLevel.MEMORY_ONLY());
     }
 

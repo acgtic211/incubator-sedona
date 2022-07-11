@@ -16,6 +16,7 @@
  */
 package org.apache.sedona.core.showcase;
 
+import org.apache.sedona.core.utils.TimeUtils;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.Point;
 import org.apache.log4j.Level;
@@ -109,6 +110,8 @@ public class KNNJ
 
     private static Integer partitions;
 
+    private static boolean combi;
+
     /**
      * The main method.
      *
@@ -151,7 +154,9 @@ public class KNNJ
             PointRDDIndexType = null;
         }
 
-        partitions = args.length == 6 ? Integer.parseInt(args[5]) : null;
+        partitions = args.length >= 6 ? Integer.parseInt(args[5]) : null;
+
+        combi = args.length >= 7 ? "true".equals(args[6]) : false;
 
         try {
             testKnnJoinQueryUsingIndex();
@@ -173,6 +178,8 @@ public class KNNJ
     public static void testKnnJoinQueryUsingIndex()
             throws Exception
     {
+        long startTime = System.currentTimeMillis();
+
         System.out.println("Reading "+PointRDDInputLocation);
         objectRDD = new PointRDD(sc, PointRDDInputLocation, PointRDDOffset, PointRDDSplitter, true, partitions, StorageLevel.MEMORY_ONLY());
         //objectRDD = new PointRDD(sc, PointRDDInputLocation, PointRDDOffset, PointRDDSplitter, true, StorageLevel.MEMORY_ONLY());
@@ -180,19 +187,32 @@ public class KNNJ
         PointRDD queryRDD = new PointRDD(sc, PointRDD2InputLocation, PointRDDOffset, PointRDDSplitter, true, partitions, StorageLevel.MEMORY_ONLY());
         //PointRDD queryRDD = new PointRDD(sc, PointRDD2InputLocation, PointRDDOffset, PointRDDSplitter, true, StorageLevel.MEMORY_ONLY());
 
-        System.out.println("Partitioning "+PointRDDInputLocation);
-        objectRDD.spatialPartitioning(joinQueryPartitioningType);
-        System.out.println("Partitioning "+PointRDD2InputLocation);
-        queryRDD.spatialPartitioning(objectRDD.getPartitioner());
+        if(combi) {
+            System.out.println("Partitioning "+PointRDDInputLocation);
+            System.out.println("with P and Q");
+            objectRDD.spatialPartitioning(joinQueryPartitioningType, queryRDD);
+            System.out.println("Partitioning "+PointRDD2InputLocation);
+            queryRDD.spatialPartitioning(objectRDD.getPartitioner());
+        }
+        else {
+            System.out.println("Partitioning "+PointRDDInputLocation);
+            System.out.println("with Q");
+            objectRDD.spatialPartitioning(joinQueryPartitioningType);
+            System.out.println("Partitioning "+PointRDD2InputLocation);
+            queryRDD.spatialPartitioning(objectRDD.getPartitioner());
+            queryRDD.rawSpatialRDD = queryRDD.rawSpatialRDD.unpersist();
+        }
 
         System.out.println("Build Index "+PointRDDInputLocation);
         if(PointRDDIndexType!=null) {
+            System.out.println("with Index Type "+PointRDDIndexType);
             objectRDD.buildIndex(PointRDDIndexType, true);
             objectRDD.indexedRDD.persist(StorageLevel.MEMORY_ONLY());
+            objectRDD.rawSpatialRDD = objectRDD.rawSpatialRDD.unpersist();
         } else {
             objectRDD.spatialPartitionedRDD.persist(StorageLevel.MEMORY_ONLY());
         }
-        queryRDD.spatialPartitionedRDD.persist(StorageLevel.MEMORY_ONLY());
+        //queryRDD.spatialPartitionedRDD.persist(StorageLevel.MEMORY_ONLY());
 
         //System.out.println(queryRDD.spatialPartitionedRDD.mapPartitionsWithIndex(elementsPerPartition(), false).collect().toString());
 
@@ -205,6 +225,9 @@ public class KNNJ
 
             System.out.println(resultSize);
         }
+
+        System.out.println("elapsed "+ TimeUtils.elapsedSince(startTime));
+
     }
 
     private static Function2<Integer, Iterator<Point>, Iterator<Integer>> elementsPerPartition() {

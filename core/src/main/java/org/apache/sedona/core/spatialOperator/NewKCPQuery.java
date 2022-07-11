@@ -207,7 +207,7 @@ public class NewKCPQuery
 
         //verifyPartitioningMatch(spatialRDD, pointRDD);
 
-        NestedLoopJudgement judgement = new NestedLoopJudgement(joinParams.k, joinParams.algorithm, bound, dedupParams);
+        NestedLoopJudgement judgement = new NestedLoopJudgement(joinParams.k, joinParams.algorithm, bound, dedupParams, null, null, null);
         judgement.broadcastDedupParams(sparkContext);
         joinResult = spatialRDD.spatialPartitionedRDD.zipPartitions(pointRDD, judgement);
 

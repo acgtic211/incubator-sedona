@@ -27,12 +27,12 @@ import org.apache.sedona.core.joinJudgement.DedupParams;
 import org.apache.sedona.core.knnJudgement.GeometryDistanceComparator;
 import org.apache.sedona.core.spatialPartitioning.SpatialPartitioner;
 import org.apache.sedona.core.utils.HalfOpenRectangle;
+import scala.Tuple2;
+import scala.Tuple3;
 
 import javax.annotation.Nullable;
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.PriorityQueue;
+import java.util.*;
 
 /**
  * Base class for partition level join implementations.
@@ -150,79 +150,76 @@ abstract class JudgementBase
         return false;
     }
 
-    protected boolean isFinal(Geometry streamShape, double maxDistance) {
-        boolean isFinal = true;
+    protected int isFinal(Geometry streamShape, double maxDistance) {
         if(maxDistance == Double.NEGATIVE_INFINITY)
-            return true;
+            return 1;
         final Circle circle = new Circle(streamShape, maxDistance);
-        final List<Envelope> partitions = this.partitioner.getGrids();
         final int thisPartition = TaskContext.getPartitionId();
-        for(int n = 0; n < partitions.size(); n++) {
-            if(thisPartition == n)
-                continue;
-            Envelope grid = partitions.get(n);
-            if (circle.getEnvelopeInternal().intersects(grid)) {
-                isFinal = false;
+        try {
+            Iterator<Tuple2<Integer, Circle>> overlaps = this.partitioner.placeObject(circle);
+            int overlapsCount = 0;
+            while(overlaps.hasNext()){
+                if(thisPartition == overlaps.next()._1())
+                    continue;
+                overlapsCount++;
                 break;
             }
+
+            return overlapsCount;
+
+        } catch (Exception e) {
+            e.printStackTrace();
         }
-        return isFinal;
+        return 0;
     }
 
-    protected KnnData<Geometry> calculateKnnData(STRtree treeIndex, Geometry streamShape, GeometryItemDistance geometryItemDistance, boolean checkOverlaps) {
+    protected List calculateKnnData(STRtree treeIndex, Geometry streamShape, GeometryItemDistance geometryItemDistance, boolean checkOverlaps) {
 
         Object[] topk = null;
 
         try{
             topk = treeIndex.nearestNeighbour(streamShape.getEnvelopeInternal(), streamShape, geometryItemDistance, this.k);
-            List<Geometry> localK = new ArrayList<>(topk.length);
+            List localK = Arrays.asList(topk);
 
-            double maxDistance = Double.NEGATIVE_INFINITY;
+            //double maxDistance = topk.length > 0 ? streamShape.distance((Geometry) topk[topk.length -1 ]) : Double.NEGATIVE_INFINITY;
 
-            for (int i = 0; i < topk.length; i++) {
-                maxDistance = Math.max(maxDistance,streamShape.distance((Geometry) topk[i]));
+            /*for (int i = 0; i < topk.length; i++) {
                 localK.add((Geometry) topk[i]);
-            }
+            }*/
 
-            boolean isFinal = !checkOverlaps || isFinal(streamShape, maxDistance);
+            /*int overlaps = 0;
+            if(checkOverlaps)
+                overlaps = isFinal(streamShape, maxDistance);*/
 
-            return new KnnData<>(localK, isFinal, maxDistance);
+            return localK;//, overlaps == 0, maxDistance);
 
         }catch (Exception e){
-            return new KnnData<>(new ArrayList<>(), true, Double.NEGATIVE_INFINITY);
+            return new ArrayList<>();
         }
 
 
 
     }
 
-    protected KnnData<Geometry> calculateKnnData(List<Geometry> trainingObjects, Geometry streamShape, boolean checkOverlaps) {
-        PriorityQueue<Geometry> pq = new PriorityQueue<Geometry>(k, new GeometryDistanceComparator(streamShape, false));
-        double maxDistance = Double.NEGATIVE_INFINITY;
-        for (Geometry curpoint : trainingObjects) {
-            double distance = curpoint.distance(streamShape);
-            if (pq.size() < k) {
-                pq.offer(curpoint);
-                maxDistance = Math.max(maxDistance, distance);
-            }
-            else {
-                if (maxDistance > distance) {
-                    pq.poll();
-                    pq.offer(curpoint);
-                }
-                maxDistance = pq.peek().distance(streamShape);
-            }
-        }
-        ArrayList<Geometry> res = new ArrayList<>();
-        while(!pq.isEmpty()){
-            res.add(pq.poll());
+    protected List calculateKnnData(STRtree treeIndex, Geometry streamShape, GeometryItemDistance geometryItemDistance, double maxDistance) {
+
+        Object[] topk = null;
+
+        try{
+            topk = treeIndex.nearestNeighbour(streamShape.getEnvelopeInternal(), streamShape, geometryItemDistance, this.k, maxDistance);
+            List localK = Arrays.asList(topk);
+
+            return localK;
+
+        }catch (Exception e){
+            return new ArrayList<>();
         }
 
-        boolean isFinal = !checkOverlaps || isFinal(streamShape, maxDistance);
-        return new KnnData<>(res, isFinal, maxDistance);
+
+
     }
 
-    public KnnData<Geometry> calculateKnnDataSorted(List<Geometry> trainingObjects, Geometry streamShape, boolean checkOverlaps, Double distances) {
+    public Tuple3 calculateKnnDataSorted(List<Geometry> trainingObjects, Geometry streamShape, boolean checkOverlaps, Double distances) {
         PriorityQueue<Geometry> pq = new PriorityQueue<Geometry>(k, new GeometryDistanceComparator(streamShape, false));
 
         double maxDistance = Double.NEGATIVE_INFINITY;
@@ -348,7 +345,7 @@ abstract class JudgementBase
         }
 
         if(pq.isEmpty())
-            return new KnnData<>(new ArrayList<>(), true, Double.NEGATIVE_INFINITY);
+            return new Tuple3(new ArrayList<>(), true, Double.NEGATIVE_INFINITY);
 
         maxDistance = pq.peek().distance(streamShape);
         ArrayList<Geometry> res = new ArrayList<>();
@@ -356,7 +353,11 @@ abstract class JudgementBase
             res.add(pq.poll());
         }
 
-        boolean isFinal = !checkOverlaps || isFinal(streamShape, maxDistance);
-        return new KnnData<>(res, isFinal, maxDistance);
+        int overlaps = 0;
+        if(checkOverlaps)
+            overlaps = isFinal(streamShape, maxDistance);
+
+        return new Tuple3(res, overlaps == 0, maxDistance);
+
     }
 }

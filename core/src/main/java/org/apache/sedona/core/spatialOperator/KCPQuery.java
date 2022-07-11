@@ -44,6 +44,7 @@ import org.apache.spark.util.random.SamplingUtils;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
 import scala.Tuple2;
+import scala.collection.Iterable;
 
 import java.util.*;
 
@@ -183,10 +184,9 @@ public class KCPQuery
     {
 
         SparkContext sparkContext = spatialRDD.spatialPartitionedRDD.context();
-        Metric buildCount = Metrics.createMetric(sparkContext, "buildCount");
-        Metric streamCount = Metrics.createMetric(sparkContext, "streamCount");
-        Metric resultCount = Metrics.createMetric(sparkContext, "resultCount");
-        Metric candidateCount = Metrics.createMetric(sparkContext, "candidateCount");
+        Metric queryCount = Metrics.createMetric(sparkContext, "queryCount");
+        Metric dataCount = Metrics.createMetric(sparkContext, "dataCount");
+        Metric timeElapsed = Metrics.createMetric(sparkContext, "timeElapsed");
 
         final SpatialPartitioner partitioner =
                 (SpatialPartitioner) spatialRDD.spatialPartitionedRDD.partitioner().get();
@@ -204,7 +204,8 @@ public class KCPQuery
 
         System.out.println("Bound: "+bound);
 
-        queryRDD.spatialPartitioning(partitioner);
+        if(!spatialRDD.getPartitioner().equals(queryRDD.getPartitioner()))
+            queryRDD.spatialPartitioning(partitioner);
 
         verifyPartitioningMatch(queryRDD, spatialRDD);
 
@@ -212,13 +213,20 @@ public class KCPQuery
 
         if(intersects) {
 
-            NestedLoopJudgement judgement = new NestedLoopJudgement(joinParams.k, joinParams.algorithm, bound, dedupParams);
+            NestedLoopJudgement judgement = new NestedLoopJudgement(joinParams.k, joinParams.algorithm, bound, dedupParams, queryCount, dataCount, timeElapsed);
             judgement.broadcastDedupParams(sparkContext);
             firstJoinResult = spatialRDD.spatialPartitionedRDD.zipPartitions(queryRDD.spatialPartitionedRDD, judgement);
 
             boundPq = firstJoinResult.fold(null, KCPQueryUtils::foldHeaps);
 
         }
+
+        System.out.println("query");
+        printMetric(queryCount);
+        System.out.println("data");
+        printMetric(dataCount);
+        System.out.println("elapsed");
+        printMetric(timeElapsed);
 
         final Double secondBound = boundPq.top().distance;
 
@@ -250,6 +258,15 @@ public class KCPQuery
         System.out.println("Final Bound: "+result.top().distance);
 
         return result;
+    }
+
+    private static void printMetric(Metric queryCount) {
+        scala.collection.immutable.Map<Object, Object> queryCounts = queryCount.value();
+        scala.collection.Iterator<Object> keys = queryCounts.keys().iterator();
+        while(keys.hasNext()){
+            Object key = keys.next();
+            System.out.println(queryCounts.get(key).get());
+        }
     }
 
     private static <T extends Geometry> Function2<Integer, Iterator<T>, Iterator<T>> filterBounds(DedupParams dedupParams, Double secondBound) {

@@ -24,6 +24,8 @@ import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 import org.apache.sedona.core.enums.KCPQAlgorithm;
 import org.apache.sedona.core.joinJudgement.DedupParams;
+import org.apache.sedona.core.monitoring.Metric;
+import org.apache.sedona.core.utils.TimeUtils;
 import org.apache.spark.api.java.function.FlatMapFunction2;
 import org.locationtech.jts.geom.Geometry;
 
@@ -36,13 +38,19 @@ public class NestedLoopJudgement<T extends Geometry, U extends Geometry>
         implements FlatMapFunction2<Iterator<T>, Iterator<U>, PriorityQueue<DistanceAndPair<T,U>>>, Serializable
 {
     private static final Logger log = LogManager.getLogger(NestedLoopJudgement.class);
+    private Metric queryCount = null;
+    private Metric timeElapsed = null;
+    private Metric dataCount = null;
 
     /**
      * @see org.apache.sedona.core.kcpJudgement.JudgementBase
      */
-    public NestedLoopJudgement(int k, KCPQAlgorithm algorithm, Double beta, @Nullable DedupParams dedupParams)
+    public NestedLoopJudgement(int k, KCPQAlgorithm algorithm, Double beta, @Nullable DedupParams dedupParams, Metric queryCount, Metric dataCount, Metric timeElapsed)
     {
         super(k, algorithm, beta, false, dedupParams);
+        this.queryCount = queryCount;
+        this.dataCount = dataCount;
+        this.timeElapsed = timeElapsed;
     }
 
     public NestedLoopJudgement(int k, KCPQAlgorithm algorithm, Double beta, boolean filter, DedupParams dedupParams) {
@@ -53,6 +61,8 @@ public class NestedLoopJudgement<T extends Geometry, U extends Geometry>
     public Iterator<PriorityQueue<DistanceAndPair<T,U>>> call(Iterator<T> iteratorObject, Iterator<U> iteratorWindow)
             throws Exception
     {
+        long startTime = System.currentTimeMillis();
+
         if (!iteratorObject.hasNext() || !iteratorWindow.hasNext()) {
             return Collections.emptyIterator();
         }
@@ -65,10 +75,18 @@ public class NestedLoopJudgement<T extends Geometry, U extends Geometry>
         List<U> queryObjects = getQueryObjects(iteratorWindow, doFilter);
         List<T> spatialObjects = getSpatialObjects(iteratorObject);
 
+        if(this.queryCount!=null)
+            queryCount.add(queryObjects.size());
+
+        if(this.dataCount!=null)
+            dataCount.add(spatialObjects.size());
+
         PriorityQueue<DistanceAndPair<T,U>> pq = this.reverseKCPQuery(spatialObjects, queryObjects, kpairs, algorithm, beta, null);
 
         result.add(pq);
-        
+
+        if(this.timeElapsed!=null)
+            timeElapsed.add(TimeUtils.elapsedSince(startTime));
         return result.iterator();
     }
 
